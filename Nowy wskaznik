@@ -151,8 +151,7 @@ int OnCalculate( const int rates_total, const int prev_calculated, const datetim
            ( BufferFast[i] < BufferSlow[i] && BufferSignal[i] > BufferFast[i] ) ) {
          BufferFast[i]        = EMPTY_VALUE;
          BufferSlow[i]        = EMPTY_VALUE;
-         BufferFastChannel[i] = EMPTY_VALUE;
-         BufferSlowChannel[i] = EMPTY_VALUE;
+
       }
    }
 
