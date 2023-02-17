@@ -1,0 +1,75 @@
+#include <Trade/Trade.mqh>
+
+int handleMa1;
+int handleMa2;
+
+int barsTotal;
+
+CTrade trade;
+
+ulong posTicket;
+
+int OnInit(){
+    handleMa1 = iMA(_Symbol,PERIOD_CURRENT,50,0,MODE_SMA,PRICE_CLOSE);
+    handleMa2 = iMA(_Symbol,PERIOD_CURRENT,200,0,MODE_SMA,PRICE_CLOSE);
+
+   barsTotal = iBars(_Symbol,PERIOD_CURRENT);
+
+   return(INIT_SUCCEEDED);
+}
+
+void OnDeinit(const int reason){
+
+}
+
+void OnTick(){
+   int bars = iBars(_Symbol,PERIOD_CURRENT);
+   if(barsTotal < bars){
+      barsTotal = bars;
+
+      double ma1[];
+      CopyBuffer(handleMa1,0,1,2,ma1);
+
+
+      double ma2[];
+      CopyBuffer(handleMa2,0,1,2,ma2);
+
+      if (ma1[1] > ma2[1] && ma1[0] < ma2[0]){
+           Print("moving average crossover buy ");
+
+     if(posTicket > 0){
+        if(trade.PositionClose(posTicket)){
+           posTicket = 0;
+         }else{
+             barsTotal = barsTotal - 1;
+         }
+   }
+
+if(posTicket <= 0){
+   if(trade.Buy(0.1,_Symbol)){
+      posTicket = trade.ResultOrder();
+   }
+}
+
+}else if (ma1[1] < ma2[1] && ma1[0] > ma2[0]){
+           Print("moving average crossover sell ");
+
+     if(posTicket > 0){
+        if(trade.PositionClose(posTicket)){
+           posTicket = 0;
+         }else{
+             barsTotal = barsTotal - 1;
+         }
+   }
+
+if(posTicket <= 0){
+   if(trade.Sell(0.1,_Symbol)){
+      posTicket = trade.ResultOrder();
+   }
+}
+
+}
+
+Comment(ma1[0], " ",ma1[1],"\n",ma2[0]," ",ma2[1],"\n",posTicket);
+}
+}
