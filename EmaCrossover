@@ -1,0 +1,160 @@
+#property copyright "Copyright 2023" 
+#property version "1.00"
+#property strict 
+
+#include <Trade/Trade.mqh>
+
+//
+//  Fast MA
+//
+
+input int                                      InpFastMABars               = 600;                     // Fast MA Bars
+input ENUM_MA_METHOD       InpFastMAMethod          = MODE_SMA;      // Fast MA Method
+input ENUM_APPLIED_PRICE  InpFastMAAppliedPrice  = PRICE_CLOSE;  // Fast MA Applied Price
+
+//
+//  Slow MA
+//
+
+input int                                      InpSlowMABars              = 1800;                    // Slow MA Bars
+input ENUM_MA_METHOD       InpSlowMAMethod         = MODE_SMA;       // Slow MA Method
+input ENUM_APPLIED_PRICE  InpSlowMAAppliedPrice  = PRICE_CLOSE;  // Slow MA AppliedPrice
+
+//
+//  comment and lots
+//
+
+input string  InpTradeComment  = "Example MA Cross with TS";   // Trade Comment 
+input double InpOrderSize          = 0.01;                                          // Order size in lots
+
+
+
+int FastHandle;
+int SlowHandle;
+
+int handleTrendMaFast;
+int handleTrendMaSlow;
+
+
+int barsTotal;
+
+CTrade trade;
+
+ulong posTicket;
+
+int OnInit(){
+
+    FastHandle  = iMA( Symbol(), Period(), InpFastMABars, 0, InpFastMAMethod, InpFastMAAppliedPrice );
+    SlowHandle = iMA( Symbol(), Period(), InpSlowMABars, 0, InpSlowMAMethod, InpSlowMAAppliedPrice );
+    
+     
+    handleTrendMaFast = iMA(_Symbol,PERIOD_M1,600,0,MODE_SMA,PRICE_CLOSE);
+    handleTrendMaSlow = iMA(_Symbol,PERIOD_M1,1800,0,MODE_SMA,PRICE_CLOSE);
+
+   barsTotal = iBars(Symbol(), Period());
+
+   return(INIT_SUCCEEDED);
+}
+
+void OnDeinit(const int reason){
+
+}
+
+void OnTick()
+
+{
+
+   int bars = iBars(Symbol() ,Period() );
+   if(barsTotal < bars)
+      {
+         barsTotal = bars;
+
+         double ma1[];
+         CopyBuffer(FastHandle,0,1,2,ma1);
+
+
+         double ma2[];
+         CopyBuffer(SlowHandle,0,1,2,ma2);
+
+         if (ma1[1] > ma2[1] && ma1[0] < ma2[0])
+            {
+              Print("moving average crossover buy ");
+
+              if(posTicket > 0 )
+                 {
+                    if(trade.PositionClose(posTicket))
+                       {
+                          posTicket = 0;
+                       }
+                       else
+                       {
+                          barsTotal = barsTotal - 1;
+                       }
+                 }
+
+              if(posTicket <= 0)
+                 {
+                    if(trade.Buy(InpOrderSize,Symbol()))
+                       {
+                          posTicket = trade.ResultOrder();
+                       }
+                 }
+              }
+              else if (ma1[1] < ma2[1] && ma1[0] > ma2[0])
+                 {
+                     Print("moving average crossover sell ");
+
+                     if(posTicket > 0)
+                        {
+                           if(trade.PositionClose(posTicket))
+                              {
+                                 posTicket = 0;
+                              }
+                              else
+                              {
+                                 barsTotal = barsTotal - 1;
+                              }
+                         }
+
+                       if(posTicket <= 0)
+                            {
+                               if(trade.Sell(InpOrderSize, Symbol()))
+                                  {
+                                     posTicket = trade.ResultOrder();
+                                  }
+                             }
+
+                   }
+             }
+                   
+             
+
+
+double maTrendFast[], maTrendSlow[];
+CopyBuffer(handleTrendMaFast,0,0,1,maTrendFast);
+CopyBuffer(handleTrendMaSlow,0,0,1,maTrendSlow);
+
+
+
+
+
+int trendDirection = 0;
+if(maTrendFast[0] > maTrendSlow[0])
+   { 
+      trendDirection = 1;
+   }
+else if(maTrendFast[0] < maTrendSlow[0])
+   { 
+      trendDirection = -1;
+   }
+  
+
+
+
+Comment("\nServer Time: ", TimeCurrent(),
+                 "\nFast Trend Ma: ",DoubleToString(maTrendFast[0],_Digits),
+                 "\nSlow Trend Ma: ",DoubleToString(maTrendSlow[0],_Digits),
+                   "\nTrend Direction: ",trendDirection);
+
+
+}
