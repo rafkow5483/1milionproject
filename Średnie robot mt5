@@ -1,7 +1,29 @@
+
+#property copyright "Copyright 2023" 
+#property version "1.00"
+#property strict 
+
 #include <Trade/Trade.mqh>
 
-int handleMa1;
-int handleMa2;
+//
+//  Fast MA
+//
+
+input int                                      InpFastMABars               = 600;                     // Fast MA Bars
+input ENUM_MA_METHOD       InpFastMAMethod.         = MODE_EMA;      // Fast MA Method
+input ENUM_APPLIED_PRICE  InpFastMAAppliedPrice  = PRICE_CLOSE;  // Fast MA Applied Price
+
+//
+//  Slow MA
+//
+
+input int                                      InpSlowMABars              = 1800;                    // Slow MA Bars
+input ENUM_MA_METHOD       InpSlowMAMethod         = MODE_EMA;       // Slow MA Method
+input ENUM_APPLIED_PRICE  InpSlowMAAppliedPrice  = PRICE_CLOSE;  // Slow MA AppliedPrice
+
+
+int FastHandle;
+int SlowHandle;
 
 int barsTotal;
 
@@ -10,10 +32,11 @@ CTrade trade;
 ulong posTicket;
 
 int OnInit(){
-    handleMa1 = iMA(_Symbol,PERIOD_CURRENT,50,0,MODE_SMA,PRICE_CLOSE);
-    handleMa2 = iMA(_Symbol,PERIOD_CURRENT,200,0,MODE_SMA,PRICE_CLOSE);
 
-   barsTotal = iBars(_Symbol,PERIOD_CURRENT);
+    FastHandle  = iMA( Symbol(), Period(), InpFastMABars, 0, InpFastMAMethod, InpFastMAAppliedPrice );
+    SlowHandle = iMA( Symbol(), Period(), InpSlowMABars, 0, InpSlowMAMethod, InpSlowMAAppliedPrice );
+
+   barsTotal = iBars(Symbol(), Period());
 
    return(INIT_SUCCEEDED);
 }
@@ -23,16 +46,16 @@ void OnDeinit(const int reason){
 }
 
 void OnTick(){
-   int bars = iBars(_Symbol,PERIOD_CURRENT);
+   int bars = iBars(Symbol() ,Period() );
    if(barsTotal < bars){
       barsTotal = bars;
 
       double ma1[];
-      CopyBuffer(handleMa1,0,1,2,ma1);
+      CopyBuffer(FastHandle,0,1,2,ma1);
 
 
       double ma2[];
-      CopyBuffer(handleMa2,0,1,2,ma2);
+      CopyBuffer(SlowHandle,0,1,2,ma2);
 
       if (ma1[1] > ma2[1] && ma1[0] < ma2[0]){
            Print("moving average crossover buy ");
@@ -43,6 +66,36 @@ void OnTick(){
          }else{
              barsTotal = barsTotal - 1;
          }
+   }
+
+if(posTicket <= 0){
+   if(trade.Buy(0.1,_Symbol)){
+      posTicket = trade.ResultOrder();
+   }
+}
+
+}else if (ma1[1] < ma2[1] && ma1[0] > ma2[0]){
+           Print("moving average crossover sell ");
+
+     if(posTicket > 0){
+        if(trade.PositionClose(posTicket)){
+           posTicket = 0;
+         }else{
+             barsTotal = barsTotal - 1;
+         }
+   }
+
+if(posTicket <= 0){
+   if(trade.Sell(0.1,_Symbol)){
+      posTicket = trade.ResultOrder();
+   }
+}
+
+}
+
+Comment(ma1[0], " ",ma1[1],"\n",ma2[0]," ",ma2[1],"\n",posTicket);
+}
+}
    }
 
 if(posTicket <= 0){
