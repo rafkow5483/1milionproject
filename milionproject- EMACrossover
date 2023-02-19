@@ -8,7 +8,7 @@
 //  Fast MA
 //
 
-input int                                      InpFastMABars               = 600;                     // Fast MA Bars
+input int                                      InpFastMABars               = 613;                     // Fast MA Bars
 input ENUM_MA_METHOD       InpFastMAMethod          = MODE_SMA;      // Fast MA Method
 input ENUM_APPLIED_PRICE  InpFastMAAppliedPrice  = PRICE_CLOSE;  // Fast MA Applied Price
 
@@ -16,15 +16,33 @@ input ENUM_APPLIED_PRICE  InpFastMAAppliedPrice  = PRICE_CLOSE;  // Fast MA Appl
 //  Slow MA
 //
 
-input int                                      InpSlowMABars              = 1800;                    // Slow MA Bars
+input int                                      InpSlowMABars              = 1407;                    // Slow MA Bars
 input ENUM_MA_METHOD       InpSlowMAMethod         = MODE_SMA;       // Slow MA Method
 input ENUM_APPLIED_PRICE  InpSlowMAAppliedPrice  = PRICE_CLOSE;  // Slow MA AppliedPrice
+
+//
+//  Trend Fast MA
+//
+
+input int                                      InpTrendFastMABars               = 613;                    // Trend Fast MA Bars
+input ENUM_MA_METHOD       InpTrendFastMAMethod          = MODE_SMA;       // Trend Fast MA Method
+input ENUM_APPLIED_PRICE  InpTrendFastMAAppliedPrice  = PRICE_CLOSE;  // Trend Fast AppliedPrice
+
+//
+//  Trend Slow MA
+//
+
+input int                                      InpTrendSlowMABars               = 1407;                    // Trend Slow MA Bars
+input ENUM_MA_METHOD       InpTrendSlowMAMethod          = MODE_SMA;       // Trend Slow MA Method
+input ENUM_APPLIED_PRICE  InpTrendSlowMAAppliedPrice  = PRICE_CLOSE;  // Trend Slow MA AppliedPrice
+
+
 
 //
 //  comment and lots
 //
 
-input string  InpTradeComment  = "Example MA Cross with TS";   // Trade Comment 
+input string  InpTradeComment  = "Example MA Crossover";         // Trade Comment 
 input double InpOrderSize          = 0.01;                                          // Order size in lots
 
 
@@ -44,12 +62,12 @@ ulong posTicket;
 
 int OnInit(){
 
-    FastHandle  = iMA( Symbol(), Period(), InpFastMABars, 0, InpFastMAMethod, InpFastMAAppliedPrice );
-    SlowHandle = iMA( Symbol(), Period(), InpSlowMABars, 0, InpSlowMAMethod, InpSlowMAAppliedPrice );
+    FastHandle  = iMA( Symbol(), PERIOD_M1, InpFastMABars, 0, InpFastMAMethod, InpFastMAAppliedPrice );
+    SlowHandle = iMA( Symbol(), PERIOD_M1, InpSlowMABars, 0, InpSlowMAMethod, InpSlowMAAppliedPrice );
     
      
-    handleTrendMaFast = iMA(_Symbol,PERIOD_M1,600,0,MODE_SMA,PRICE_CLOSE);
-    handleTrendMaSlow = iMA(_Symbol,PERIOD_M1,1800,0,MODE_SMA,PRICE_CLOSE);
+    handleTrendMaFast = iMA(Symbol(),PERIOD_M1, InpTrendFastMABars,0,InpTrendFastMAMethod,InpTrendFastMAAppliedPrice);
+    handleTrendMaSlow = iMA(Symbol(),PERIOD_M1,InpTrendSlowMABars,0,InpTrendSlowMAMethod,InpTrendSlowMAAppliedPrice);
 
    barsTotal = iBars(Symbol(), Period());
 
@@ -120,7 +138,8 @@ void OnTick()
                             {
                                if(trade.Sell(InpOrderSize, Symbol()))
                                   {
-                                     posTicket = trade.ResultOrder();
+                                  
+posTicket = trade.ResultOrder();
                                   }
                              }
 
@@ -154,7 +173,7 @@ else if(maTrendFast[0] < maTrendSlow[0])
 Comment("\nServer Time: ", TimeCurrent(),
                  "\nFast Trend Ma: ",DoubleToString(maTrendFast[0],_Digits),
                  "\nSlow Trend Ma: ",DoubleToString(maTrendSlow[0],_Digits),
-                   "\nTrend Direction: ",trendDirection);
+                   "\nTREND ( BUY = 1 / SELL = -1 ) : ",trendDirection);
 
 
 }
