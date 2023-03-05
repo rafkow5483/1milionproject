@@ -1,0 +1,256 @@
+#property copyright "Copyright 2023"
+#property link "https://www.expertadvisor.com"
+#property version "1.00"
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
+
+
+#include <Trade/Trade.mqh>
+CTrade         Trade;
+CPositionInfo  PositionInfo;
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+// Fast MA Inputs
+input int                  InpFastMAPeriods  =  613;             // Fast MA periods
+input ENUM_MA_METHOD       InpFastMAMethod   =  MODE_EMA;       // Fast MA Method
+input ENUM_APPLIED_PRICE   InpFastMAPrice    =  PRICE_CLOSE;   // Fast MA Price
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+// Slow MA Inputs
+input int                  InpSlowMAPeriods  =  1407;            // Slow MA periods
+input ENUM_MA_METHOD       InpSlowMAMethod   =  MODE_EMA;       // Slow MA Method
+input ENUM_APPLIED_PRICE   InpSlowMAPrice    =  PRICE_CLOSE;   // Slow MA Price
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+// Standard trading inputs
+input double               InpVolume         =  0.01;                 // Volume
+input int                  InpMagicNumber    =  212121;              // Magic Number
+input string               InpTradeComment   =  "Expert Advisor";   // Trade comment
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+// Indicator handles and buffers
+int      HandleFastMA;
+int      HandleSlowMA;
+double   BufferFastMA[];
+double   BufferSlowMA[];
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
+
+
+int OnInit()
+
+{
+
+   HandleFastMA   =  iMA(Symbol(), Period(), InpFastMAPeriods, 0, InpFastMAMethod, InpFastMAPrice);
+   HandleSlowMA   =  iMA(Symbol(), Period(), InpSlowMAPeriods, 0, InpSlowMAMethod, InpSlowMAPrice);
+
+ 
+   if (HandleFastMA==INVALID_HANDLE  || HandleSlowMA==INVALID_HANDLE)
+      {
+        Print("Failed to initialise indicator buffers");
+        return(INIT_FAILED);
+      }
+ 
+   ArraySetAsSeries(BufferFastMA, true);
+   ArraySetAsSeries(BufferSlowMA, true);
+ 
+   Trade.SetExpertMagicNumber(InpMagicNumber);
+
+   return(INIT_SUCCEEDED);
+
+}
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
+
+
+void OnDeinit(const int reason)
+
+{
+
+   IndicatorRelease(HandleFastMA);
+   IndicatorRelease(HandleSlowMA);
+
+}
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
+
+
+bool  NewBar() 
+
+{
+   static datetime   current  =  0;
+   datetime          now      =  iTime(Symbol(), Period(), 0);
+   if (now == current)  return(false);
+   current  =  now;
+   return(true);
+   
+}
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
+
+
+double   SymbolAsk()                   {  return(SymbolInfoDouble(Symbol(), SYMBOL_ASK)); }
+double   SymbolBid()                   {  return(SymbolInfoDouble(Symbol(), SYMBOL_BID)); }
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
+
+
+void OnTick() 
+
+{
+
+   if (!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return;
+    
+   static int  maCross  =  0;
+    
+   bool  newBar   =  NewBar();
+   if (newBar) 
+   
+      {
+         CopyBuffer(HandleFastMA, 0, 0, 3, BufferFastMA);
+         CopyBuffer(HandleSlowMA, 0, 0, 3, BufferSlowMA);
+         double   fastMa1  =  BufferFastMA[1];
+         double   fastMa2  =  BufferFastMA[2];
+         double   slowMa1  =  BufferSlowMA[1];
+         double   slowMa2  =  BufferSlowMA[2];
+         
+         
+      if (fastMa1>slowMa1 && fastMa2<=slowMa2) 
+         
+         {
+            maCross  =  1;
+            CloseTrades(POSITION_TYPE_SELL);
+         }
+       
+      if (fastMa1<slowMa1 && fastMa2>=slowMa2) 
+         
+         {
+            maCross  =  -1;
+            CloseTrades(POSITION_TYPE_BUY);
+         }
+         
+      if (maCross!=0 ) 
+         
+         {
+         
+            if (OpenTrade(maCross)>0) 
+               
+               {
+                  maCross  =  0;
+               }
+          }
+      }
+      
+}
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+bool  CloseTrades(ENUM_POSITION_TYPE type) 
+
+{
+
+   bool     result         =  true;
+    
+   int   cnt               =  PositionsTotal();
+   for(int i = cnt - 1; i >= 0; i--) 
+      {
+         ulong ticket   =  PositionGetTicket(i);
+         if (ticket<=0)
+            {
+               result   =  false;
+               continue;
+            }
+         if (PositionInfo.Symbol()!=Symbol() || PositionInfo.Magic()!=InpMagicNumber)  continue;
+         if (PositionInfo.PositionType()==type) 
+            {
+               result   &=   Trade.PositionClose(ticket);
+            }
+      }
+    
+   return(result);
+    
+}
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+bool  OpenTrade(int maCross)
+
+   {
+      if ( maCross<0 ) 
+         {
+            return(Trade.PositionOpen(Symbol(), ORDER_TYPE_SELL, InpVolume, SymbolBid(), 0, 0, InpTradeComment));
+         }
+      if ( maCross>0 )
+         {
+            return(Trade.PositionOpen(Symbol(), ORDER_TYPE_BUY, InpVolume, SymbolAsk(), 0, 0, InpTradeComment));
+   }
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
+
+    
+return(true);
+
+}
