@@ -1,0 +1,137 @@
+//+------------------------------------------------------------------+
+//|                                                          CCI.mq4 |
+//|                                  Copyright 2023, MetaQuotes Ltd. |
+//|                                             https://www.mql5.com |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2023, MetaQuotes Ltd."
+#property link      "https://www.mql5.com"
+#property version   "1.00"
+#property strict
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+
+
+
+
+// CCI Inputs
+input int                  InpCCIPeriod      =  14;            // CCI Period
+input ENUM_APPLIED_PRICE   InpCCIPrice       =  PRICE_CLOSE;   // CCI Applied price
+// Fast MA Inputs
+input int                  InpFastMAPeriods  =  14;            // Fast MA periods
+input ENUM_MA_METHOD       InpFastMAMethod   =  MODE_EMA;      // Fast MA Method
+input ENUM_APPLIED_PRICE   InpFastMAPrice    =  PRICE_CLOSE;   // Fast MA Price
+// Slow MA Inputs
+input int                  InpSlowMAPeriods  =  28;            // Slow MA periods
+input ENUM_MA_METHOD       InpSlowMAMethod   =  MODE_EMA;      // Slow MA Method
+input ENUM_APPLIED_PRICE   InpSlowMAPrice    =  PRICE_CLOSE;   // Slow MA Price
+// Standard trading inputs
+input double               InpVolume         =  0.01;          // Volume
+input int                  InpMagicNumber    =  212121;        // Magic Number
+input string               InpTradeComment   =  "CCI2MA";      // Trade comment
+
+
+int OnInit()
+  {
+//---
+   
+//---
+   return(INIT_SUCCEEDED);
+  }
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+  {
+//---
+   
+  }
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+
+
+
+
+
+bool  NewBar() {
+   static datetime   current  =  0;
+   datetime          now      =  iTime(Symbol(), Period(), 0);
+   if (now == current)  return(false);
+   current  =  now;
+   return(true);
+}
+double   SymbolAsk()                   {  return(SymbolInfoDouble(Symbol(), SYMBOL_ASK)); }
+double   SymbolBid()                   {  return(SymbolInfoDouble(Symbol(), SYMBOL_BID)); }
+
+
+
+
+
+
+void OnTick() {
+   if (!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return;
+    
+   static int  maCross  =  0;
+   static int  cciCross =  0;
+    
+   bool  newBar   =  NewBar();
+   if (newBar) {
+      double   cci1     =  iCCI(Symbol(), Period(), InpCCIPeriod, InpCCIPrice, 1);
+      double   cci2     =  iCCI(Symbol(), Period(), InpCCIPeriod, InpCCIPrice, 2);
+       
+      if (cci1>0 && cci2<=0)   cciCross =  1;
+      if (cci1<0 && cci2>=0)   cciCross =  -1;
+      double   fastMa1  =  iMA(Symbol(), Period(), InpFastMAPeriods, 0, InpFastMAMethod, InpFastMAPrice, 1);
+      double   fastMa2  =  iMA(Symbol(), Period(), InpFastMAPeriods, 0, InpFastMAMethod, InpFastMAPrice, 2);
+      double   slowMa1  =  iMA(Symbol(), Period(), InpSlowMAPeriods, 0, InpSlowMAMethod, InpSlowMAPrice, 1);
+      double   slowMa2  =  iMA(Symbol(), Period(), InpSlowMAPeriods, 0, InpSlowMAMethod, InpSlowMAPrice, 2);
+      if (fastMa1>slowMa1 && fastMa2<=slowMa2) {
+         maCross  =  1;
+         CloseTrades(ORDER_TYPE_SELL);
+      }
+       
+      if (fastMa1<slowMa1 && fastMa2>=slowMa2) {
+         maCross  =  -1;
+         CloseTrades(ORDER_TYPE_BUY);
+      }
+      if (maCross!=0 && maCross==cciCross) {
+         if (OpenTrade(maCross)>0) {
+            maCross  =  0;
+            cciCross =  0;
+         }
+      }
+   }
+}
+
+
+
+bool  CloseTrades(ENUM_ORDER_TYPE type) {
+   bool     result         =  true;
+   double   closingPrice   =  (type==ORDER_TYPE_BUY) ? SymbolBid() : SymbolAsk();
+    
+   int   cnt               =  OrdersTotal();
+   for(int i = cnt - 1; i >= 0; i--) {
+      if (!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) {
+         result   =  false;
+         continue;
+      }
+      if (OrderSymbol()!=Symbol() || OrderMagicNumber()!=InpMagicNumber)   continue;
+      if ( OrderType()==type) {
+         result   &=   OrderClose(OrderTicket(), OrderLots(), closingPrice, 0);
+      }
+   }
+    
+   return(result);
+    
+}
+int   OpenTrade(int maCross) {
+   if ( maCross<0 ) {
+      return(OrderSend(Symbol(), ORDER_TYPE_SELL, InpVolume, SymbolBid(), 0, 0, 0, InpTradeComment, InpMagicNumber));
+   }
+   if ( maCross>0 ) {
+      return(OrderSend(Symbol(), ORDER_TYPE_BUY, InpVolume, SymbolAsk(), 0, 0, 0, InpTradeComment, InpMagicNumber));
+   }
+    
+   return(0);
+}
