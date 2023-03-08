@@ -229,28 +229,28 @@ bool  CloseTrades(ENUM_POSITION_TYPE type)
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-bool  OpenTrade(int maCross)
+   bool  OpenTrade(int maCross)
 
-   {
-      if ( maCross<0 ) 
-         {
-            return(Trade.PositionOpen(Symbol(), ORDER_TYPE_SELL, InpVolume, SymbolBid(), 0, 0, InpTradeComment));
-         }
-      if ( maCross>0 )
-         {
-            return(Trade.PositionOpen(Symbol(), ORDER_TYPE_BUY, InpVolume, SymbolAsk(), 0, 0, InpTradeComment));
-   }
+      {
+         if ( maCross<0 ) 
+            {
+               return(Trade.PositionOpen(Symbol(), ORDER_TYPE_SELL, InpVolume, SymbolBid(), 0, 0, InpTradeComment));
+            }
+         if ( maCross>0 )
+            {
+             return(Trade.PositionOpen(Symbol(), ORDER_TYPE_BUY, InpVolume, SymbolAsk(), 0, 0, InpTradeComment));
+      }
 
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-
-//====================================================================================================================
-//====================================================================================================================
-
 
     
 return(true);
 
 }
+
+
+
+//====================================================================================================================
+//====================================================================================================================
+
