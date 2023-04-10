@@ -96,6 +96,10 @@ void OnTick() {
    if ( ( FastBuffer[1] > SlowBuffer[1] ) && !( FastBuffer[2] > SlowBuffer[2] ) ) {
       OpenTrade( ORDER_TYPE_BUY );
    }
+   
+   if ( ( FastBuffer[1] < SlowBuffer[1] ) && !( FastBuffer[2] < SlowBuffer[2] ) ) {
+      OpenTrade( ORDER_TYPE_SELL );
+   }
 
 
    //
@@ -165,7 +169,14 @@ void ApplyTrailingStop() {
          }
       }
 
-
+      if ( Position.PositionType() == POSITION_TYPE_SELL && sellTrailingStopPrice < Position.PriceOpen() &&
+           ( Position.StopLoss() == 0 || sellTrailingStopPrice < Position.StopLoss() ) ) {
+         ResetLastError();
+         if ( !Trade.PositionModify( ticket, sellTrailingStopPrice, Position.TakeProfit() ) ) {
+            err = GetLastError();
+            PrintFormat( "Failed to update ts on ticket %I64u to %f, err=%i", ticket, sellTrailingStopPrice, err );
+            }
+        }
    }
 }
 Give feedback
