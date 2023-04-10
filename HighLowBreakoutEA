@@ -271,3 +271,18 @@ bool CountOpenPositions(int &cntBuy, int &cntSell)
 }
 
 // normalize price
+bool NormalizePrice(double &price)
+{
+    double tickSize=0;
+    if(!SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE,tickSize))
+        {
+            Print("Failed to get tick size");
+            return false;
+        }
+    price = NormalizeDouble(MathRound(price/tickSize)*tickSize,_Digits);
+    
+    return true;
+}
+
+// update stop loss
+
