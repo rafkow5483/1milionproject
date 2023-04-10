@@ -144,7 +144,7 @@ void OnTick()
      || (range.f_high_breakout && range.f_low_breakout)
      || (range.end_time==0)
      || (range.end_time!=0 && lastTick.time>range.end_time && !range.f_entry))
-     && CountOpenPositions() ==0
+     && CountOpenPositions() ==0)
          {
 
             CalculateRange();
@@ -195,7 +195,7 @@ bool CheckInputs()
                 return false;
             }
 
-        if(InpRangeDuration <= 0 || InpRangeDuration >= 1440
+        if(InpRangeDuration <= 0 || InpRangeDuration >= 1440)
             { 
                 Alert("Range duration <= 0 or >= 1440");
                 return false;
@@ -329,7 +329,7 @@ void CheckBreakouts()
 
 
                       // calculate stop loss and take profit
-                     double sl = InpStoploss == 0 ? 0 : NormalizeDouble(lastTick.bid -  ((range.high-range.low) * InpStopLoss * 0.01),_Digits);
+                     double sl = InpStopLoss == 0 ? 0 : NormalizeDouble(lastTick.bid -  ((range.high-range.low) * InpStopLoss * 0.01),_Digits);
 
                     double tp = InpTakeProfit == 0 ? 0 : NormalizeDouble(lastTick.bid + (( range.high-range.low) * InpTakeProfit * 0.01),_Digits);
 
@@ -346,7 +346,7 @@ trade.PositionOpen(_Symbol,ORDER_TYPE_BUY,InpLots,lastTick.ask,sl,tp,"Time range
 
 
                       // calculate stop loss and take profit
-                     double sl = InpStoploss == 0 ? 0 : NormalizeDouble(lastTick.ask + ((range.high-range.low) * InpStopLoss * 0.01),_Digits);
+                     double sl = InpStopLoss == 0 ? 0 : NormalizeDouble(lastTick.ask + ((range.high-range.low) * InpStopLoss * 0.01),_Digits);
 
                     double tp = InpTakeProfit == 0 ? 0 : NormalizeDouble(lastTick.ask - (( range.high-range.low) * InpTakeProfit * 0.01),_Digits);
 
@@ -373,7 +373,7 @@ bool ClosePositions()
                        Print("Failed to get position ticket"); 
                        return false;
                    }
-              if(!PositionSelcetaByTicket(ticket))
+              if(!PositionSelectByTicket(ticket))
                    {
                        Print("Failed to select position by ticket"); 
                        return false;
@@ -414,7 +414,7 @@ void DrawObjects()
              ObjectCreate(NULL,"range start",OBJ_VLINE,0,range.start_time,0);
              ObjectSetString(NULL,"range start",OBJPROP_TOOLTIP,"start of the range \n"+TimeToString(range.start_time,TIME_DATE|TIME_MINUTES));
              ObjectSetInteger(NULL,"range start",OBJPROP_COLOR,clrBlue);
-             ObjectSetInteger(NULL,"range start",OBJPROP_WIDTH,2;);
+             ObjectSetInteger(NULL,"range start",OBJPROP_WIDTH,2);
              ObjectSetInteger(NULL,"range start",OBJPROP_BACK,true);
 
 }
@@ -424,7 +424,7 @@ ObjectDelete(NULL,"range end");
 if(range.end_time>0)
     {
         ObjectCreate(NULL,"range end",OBJ_VLINE,0,range.end_time,0);
-        ObjectSetString(NULL,"range end",OBJPROP_TOOLTIP,"end of the range \n"+TimeToString(range.end_time,TIME__DATE|TIME_MINUTES));
+        ObjectSetString(NULL,"range end",OBJPROP_TOOLTIP,"end of the range \n"+TimeToString(range.end_time,TIME_DATE|TIME_MINUTES));
         ObjectSetInteger(NULL,"range end",OBJPROP_COLOR,clrBlue);
         ObjectSetInteger(NULL,"range end",OBJPROP_WIDTH,2) ; 
         ObjectSetInteger(NULL,"range end",OBJPROP_BACK,true); 
@@ -438,7 +438,7 @@ ObjectDelete(NULL,"range close");
 if(range.close_time>0)
     {
         ObjectCreate(NULL,"range close",OBJ_VLINE,0,range.close_time,0);
-        ObjectSetString(NULL,"range close",OBJPROP_TOOLTIP,"close of the range \n"+TimeToString(range.close_time,TIME__DATE|TIME_MINUTES));
+        ObjectSetString(NULL,"range close",OBJPROP_TOOLTIP,"close of the range \n"+TimeToString(range.close_time,TIME_DATE|TIME_MINUTES));
         ObjectSetInteger(NULL,"range close",OBJPROP_COLOR,clrRed); 
         ObjectSetInteger(NULL,"range close",OBJPROP_WIDTH,2) ; 
         ObjectSetInteger(NULL,"range close",OBJPROP_BACK,true); 
