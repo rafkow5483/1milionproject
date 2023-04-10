@@ -311,4 +311,18 @@ void UpdateStopLoss(double slDistance)
              double newSL = currPrice - slDistance * n;
              if(!NormalizePrice(newSL)) {return;}
 
+             // check
+             if((newSL*n) < ( currSL*n) || NormalizeDouble(MathAbs(newSL-currSL),_Digita)<_Point)
+             {continue;}
+             
+              // check for sto level
+              long lebel = SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL);
+              if(level!=0 && MathAbs(currPrice-newsSL)<=*_Point)
+              {Print("");continue;}
 
+              // modify position with new stop loss
+              if(!trade.PositionModify(ticket,newSL,currTP)){
+               Print("",(string)ticket,"currSL:",(string)currSL,":",(string)newSL,":",(string)currTzp);return;}
+}
+}
+}    
