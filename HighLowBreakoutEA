@@ -199,3 +199,75 @@ void DrawObjects()
     ObjectCreatLL
     ObjectSetInteger
     ObjectSetIntege
+    
+    // low
+    ObjectDelete(NULL,"high");
+    ObjectCreatLL
+    ObjectSetInteger
+    ObjectSetIntege
+    
+    //index filter
+    
+    // text
+    
+// check if we have a bar open tick
+bool IsNewBar ()
+{
+    static datetime previousTime = 0;
+    datetime currentTime = iTime(_Symbol,PERIOD_CURRENT,0);
+    if(previousTime!=currentTime)
+        {
+            previousTime=currentTime;
+            return true;
+        }
+    return false;
+}
+
+// count open positions
+bool CountOpenPositions(int &cntBuy, int &cntSell)
+{
+    cntBuy = 0;
+    cntSell = 0;
+    int total = PositionsTotal();
+    for(int i=total-1; i>=0; i--)
+        {
+            ulong ticket = PositionGetTicket(1);
+            if(ticket<=0)
+                {
+                    Print("Failed to get position ticket");
+                    return false;
+                }
+             if(!PositionSelectByTicket(ticket))
+                {
+                    Print("Failed to sekect position");
+                    return false;
+                }
+             long magic;
+             if(!PositionGetInteger(POSITION_MAGIC,magic))
+                {
+                    Print("Failed to get position magicnumber");
+                    return false;
+                }
+             if(magic==InpMagicnumber)
+                {
+                    long type;
+                    if(!PositionGetInteger(POSITION_TYPE,type))
+                        {
+                            Print("Failed to get positiontype"); 
+                            return false;
+                        }
+                     if(type==POSITION_TYPE_BUY
+                        {
+                            cntBuy++;
+                        }
+                     if(type==POSITION_TYPE_SELL)
+                        {
+                            cntSell++;
+                        }
+                  }
+           }
+           
+     return true;
+}
+
+// normalize price
