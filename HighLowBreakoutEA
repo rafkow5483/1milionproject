@@ -219,10 +219,15 @@ void DrawObjects()
     
     // text
     ObjectDelete(NULL,"text");
-    ObjectCreate(NULL,"text",OBJ_TEXT,0,
-    ObjectSetInteger(NULL,"text" 
-    ObjectSetInteger(NULL,"text"
-    ObjectSetString(NULL,"text"
+    ObjectCreate(NULL,"text",OBJ_TEXT,0,time2,low);
+    ObjectSetInteger(NULL,"text",OBJPROP_ANXHOR,ANCHOR_RIGHT_UPPER);
+    ObjectSetInteger(NULL,"text",OBJPROP_COLOR,clrBlack);
+    ObjectSetString(NULL,"text",OBJPROP_TEXT,"Bars:"+(string)InpBars+
+                                             " index filter:"+DoubleToString(round(InpBars*InpIndexFilter*0.01),0)+
+                                             " high index:"+(string)highIdx+
+                                             " low index:"+(string)lowIdx+
+                                             " size:"+DoubleToString((high-low)/_Point,0));
+ }
     
 // check if we have a bar open tick
 bool IsNewBar ()
