@@ -207,8 +207,22 @@ void DrawObjects()
     ObjectSetIntege
     
     //index filter
+    ObjectDelete(NULL,"indexFilter");
+    if(InpIndexFilter>0){
+        datetime timeIF1 = iTime(_Symbol,PERIOD_CURRENT,(int)(InpBars-round(InpBars*InpIndexFilter*0.01)));
+        datetime timeIF2 = iTime(_Symbol,PERIOD_CURRENT,(int)(round(InpBars*InpIndexFilter*0.01)));
+        ObjectCreate(NULL,"indexFilter",OBJ_RECTANGLE,0,timeIF1,low,timeIF2,high);
+        ObjectSetInteger(NULL,"indexFilter",OBJPROP_BACK,true);
+        ObjectSetInteger(NULL,"indexFilter",OBJPROP_FILL,true);
+        ObjectSetInteger(NULL,"indexFilter",OBJPROP_COLOR,clrMintCream);
+     }
     
     // text
+    ObjectDelete(NULL,"text");
+    ObjectCreate(NULL,"text",OBJ_TEXT,0,
+    ObjectSetInteger(NULL,"text" 
+    ObjectSetInteger(NULL,"text"
+    ObjectSetString(NULL,"text"
     
 // check if we have a bar open tick
 bool IsNewBar ()
