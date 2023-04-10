@@ -1,1 +1,201 @@
-#property copyright
+#property copyright "Copyright 2023"
+#property link "https://www.breakout.com"
+#property version "1.00"
+
+//=====================================
+//=====================================
+
+#include <Trade\Trade.mqh>
+ 
+//=====================================
+//=====================================
+
+static input long    InpMagicnumber = 546872;    // magicnumber
+static input double  InpLots = 0.01;             // lot size
+input int            InpBars = 20;               // bars for high/low
+input int            InpIndexFilter = 0;         // index filter in% (0=off)
+input int            InpSizeFilter = 0;          // channel size filter in points (0=off)
+input int            InpStopLoss = 200;          // stop loss in points
+input bool           InpTrailingSL = true;       // trailing stop loss?
+input int            InpTakeProfit = 0;          // take profit in points (0=off)
+
+//=====================================
+//=====================================
+
+double high = 0;
+double low = 0;
+int highIdx = 0;
+int lowIdx = 0;
+MqlTick currentTick, previousTick;
+CTrade trade;
+
+//=====================================
+//=====================================
+
+int OnInit()
+{
+
+    // check for user imput
+    if(!CheckInputs())
+        {
+            return INIT_PARAMETERS_INCORRECT;
+        }
+        
+    // set magicnumber
+    trade.SetExpertMagicNumber(InpMagicnumber);
+    
+    return(INIT_SUCCEEDED);
+}
+
+//=====================================
+//=====================================
+
+void OnDeinit(const int reason)
+{
+    ObjectDelete(NULL,"high");
+    ObjectDelete(NULL,"low");
+    ObjectDelete(NULL,"text");
+    ObjectDelete(NULL,"indexFilter");
+}
+
+//=====================================
+//=====================================
+
+void OnTick()
+{
+    // check for new bar open tick
+    if(!IsNewBar())
+        {
+            return;
+        }
+    // get tick
+    previousTick = currentTick;
+    if(!SymbolInfoTick(_Symbol,currentTick))
+        {
+            Print("Failed to get current tick"); return;
+        }
+
+    // count open positions
+    int cntBuy, cntSell;
+    if(!CountOpenPositions(cntBuy,cntSell))
+        {
+            return;
+        }
+
+    // check for buy position
+    if(cntBuy==0 && high!=0 && previousTick.ask<high && currentTick.ask>=high && CheckIndexFilter(highIdx) && CheckSizeFilter())
+        {
+            // calculate stop loss / take profit
+            double sl = InpStopLoss==0 ? 0 : currentTick.bid - InpStopLoss * _Point;
+            double tp = InpTakeProfit==0 ? 0 : currentTick.bid + InpTakeProfit * _Point;
+            if(!NormalizePrice(sl)){return;}
+            if(!NormalizePrice(tp)){return;}
+
+            trade.PositionOpen(_Symbol,ORDER_TYPE_BUY,InpLots,currentTick.ask,sl,tp,"HighLowBreakoutEA");
+        }
+
+    // check for sell position
+    if(cntSell=0 && low!=0 && previousTick.bid>low && currentTick.bid<=low && CheckIndexFilter(lowIdx) && CheckSizeFilter())
+        {
+            // calculate stop loss / take profit
+            double sl = InpStopLoss==0 ? 0 : currentTick.ask + InpStopLoss * _Point;
+            double tp = InpTakeProfit==0 ? 0 : currentTick.ask- InpTakeProfit * _Point;
+            if(!NormalizePrice(sl)){return;}
+            if(!NormalizePrice(tp)){return;}
+
+            trade.PositionOpen(_Symbol,ORDER_TYPE_SELL,InpLots,currentTick.bid,sl,tp,"HighLowBreakoutEA");
+        }
+        
+    // update stoploss
+    if(InpStopLoss>0 && InpTrailingSL)
+        {
+            UpdateStopLoss(InpStopLoss*_Point);
+        }
+
+    // calculate high/low
+    highIdx = iHighest(_Symbol,PERIOD_CURRENT,MODE_HIGH,InpBars,1);
+    lowIdx = iLowest(_Symbol,PERIOD_CURRENT,MODE_LOW,InpBars,1);
+    high = iHigh(_Symbol,PERIOD_CURRENT,highIdx);
+    low = iLow(_Symbol,PERIOD_CURRENT,lowIdx);
+        
+    DrawObjects();
+}
+
+//=====================================
+//=====================================
+
+// check user input
+bool CheckInputs()
+{
+    if(InpMagicnumber<=0)
+        {
+            Alert("Wrong input: Magicnumber <= 0");
+            return false;
+        }
+    if(InpLots<=0)
+        {
+            Alert("Wrong input: Lot size <= 0");
+            return false;
+        }
+    if(InpBars<=0)
+        {
+            Alert("Wrong input: Bars <= 0");
+            return false;
+        }
+    if(InpIndexFilter<0 || InpIndexFilter>=50)
+        {
+            Alert("Wrong input: Index filter < 0 or >= 50");
+            return false;
+        }
+    if(InpSizeFilter<0)
+        {
+            Alert("Wrong input: Size filter < 0");
+            return false;
+        }
+    if(InpStopLoss<=0)
+        {
+            Alert("Wrong input: Stop loss <= 0");
+            return false;
+        }      
+    if(InpTakeProfit<0)
+        {
+            Alert("Wrong input: Take profit < 0");
+            return false;
+        }  
+        
+    return true;
+}
+
+// check if high/low is inside valid index range
+bool CheckIndexFilter(int index)
+{
+    if(InpIndexFilter>0 && (index<=round(InpBars*InpIndexFilter*0.01) || index>InpBars-round(InpBars*InpIndexFilter*0.01)))
+        {
+            return false;
+        }
+    return true;
+}
+
+//check channel size
+bool CheckSizeFilter()
+{
+    if(InpSizeFilter>0 && (high-low)>InpSizeFilter*_Point)
+        {
+            return false;
+        }
+    return true;
+}
+
+//=====================================
+//=====================================
+  
+void DrawObjects()
+{
+    datetime time1 = iTime(_Symbol,PERIOD_CURRENT,InpBars);
+    datetime time2 = iTime(_Symbol,PERIOD_CURRENT,1);
+    
+    // high
+    ObjectDelete(NULL,"high");
+    ObjectCreatLL
+    ObjectSetInteger
+    ObjectSetIntege
