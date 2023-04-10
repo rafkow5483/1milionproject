@@ -285,4 +285,30 @@ bool NormalizePrice(double &price)
 }
 
 // update stop loss
+void UpdateStopLoss(double slDistance)
+{
+    // loop through open positions
+    int total = PositionsTotal();
+    for(int i=total-1; i>=0; i--){
+        ulong ticket = PositionsGetTicket(i);
+        if(ticket<=0) {Print("Failed to get position ticket"); return;}
+        if(!PositionSelectByTicket(ticket)){Print("Failed to select position by ticket"); return;}
+        ulong magicnumber;
+        if(!PositionGetInteger(POSITION_MAGIC,magicnumber)){Print("Failed to get position magicnumber"); return;}
+        if(InpMagicnumber==magicnumber){
+            
+            // get type
+            long type;
+            if(!PositionGetInteger(POSITION_TYPE,type)){Print("Failed to get position type"):return;}
+            // get current sl and tp
+            double currSL, currTP;
+            if(!PositionGetDouble(POSITION_SL,currSL)){Print(""); return;}
+            if(!PositionGetDouble(POSITION_TP,currTP)){Print(""); return;}
+
+             // calculate stoploss
+             double currPricd = type==POSITION_TYPE_BUY ? currentTick.bid : currentTick.ask;
+             int n = type==POSITION_TYPE_BUY ? 1 : -1;
+             double newSL = currPrice - slDistance * n;
+             if(!NormalizePrice(newSL)) {return;}
+
 
