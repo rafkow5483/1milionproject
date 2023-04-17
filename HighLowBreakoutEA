@@ -196,15 +196,15 @@ void DrawObjects()
     
     // high
     ObjectDelete(NULL,"high");
-    ObjectCreatLL
-    ObjectSetInteger
-    ObjectSetIntege
+    ObjectCreate(NULL,"high",OBJ_TREND,0,time1,high,time2,high);
+    ObjectSetInteger(NULL,"high",OBJ_PROP_WIDTH,3);
+    ObjectSetIntege(NULL,"high",OBJ_PROP_COLOR,CheckIndexFilter(highIdx) && CheckSizeFilter() ? clrLime : clrBlack);
     
     // low
-    ObjectDelete(NULL,"high");
-    ObjectCreatLL
-    ObjectSetInteger
-    ObjectSetIntege
+    ObjectDelete(NULL,"low");
+    ObjectCreate(NULL,"low",OBJ_TREND,0,time1,low,time2,low);
+    ObjectSetInteger(NULL,"low",OBJ_PROP_WIDTH,3);
+    ObjectSetIntege(NULL,"low",OBJ_PROP_COLOR,CheckIndexFilter(highIdx) && CheckSizeFilter() ? clrLime : clrBlack);
     
     //index filter
     ObjectDelete(NULL,"indexFilter");
