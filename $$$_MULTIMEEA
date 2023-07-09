@@ -104,3 +104,5 @@ void OnTick() {
 	if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return;	//	exit if expert trading is not allowed
 	if (!MQLInfoInteger(MQL_TRADE_ALLOWED)) return;
 	if (!AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return;
+	if (!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return;
+	
