@@ -12,7 +12,7 @@
 #property strict
 
 /*
-	Trading Rules
+	Zasady handlu
 	
 	1.	Ustaw kierunek trendu przy użyciu wyższych ram czasowych 8 i 21 ema
 	
@@ -117,10 +117,10 @@ input	double					InpOrderSize			=	0.01;				//	Order size
 input	int						InpMagicNumber			=	212121;			//	Magic number
 input	string					InpTradeComment		=	__FILE__;		//	Trade comment
 
-//	For inputs that need one time conversion
+//	Dla danych wejściowych wymagających jednorazowej konwersji
 double	GEntryOffset;
 
-// This is where I use the modular indicator classes
+// W tym miejscu używam modułowych klas wskaźników
 //	Include the indicator classes
 
 
