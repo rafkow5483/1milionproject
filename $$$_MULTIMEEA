@@ -26,7 +26,7 @@
 	
 	6.	sl przy hi/lo z poprzednich 5 świec +/- 3 pips
 	
-	7.	tp1 at 1:1 rr ratio
+	7.	tp1 at 1:1 rr ratio.  linika 410
 	
 	8.	tp2 przy stosunku 2:1 rr lub trailing stop przy hi/lo poprzednich 3 słupkach
 
@@ -401,6 +401,11 @@ void OnTick() {
 	OpenAtTarget();	
 	
 }
+
+
+// ============================================================================
+// ============================================================================
+
 
 void	OpenAtTarget() {
 
