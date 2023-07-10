@@ -14,21 +14,21 @@
 /*
 	Trading Rules
 	
-	1.	Set trend direction using higher timeframe 8 and 21 ema
+	1.	Ustaw kierunek trendu przy użyciu wyższych ram czasowych 8 i 21 ema
 	
-	2.	Match trend on current timeframe 8, 13, 21 ema
+	2.	Dopasuj trend w bieżącym przedziale czasowym 8, 13, 21 ema
 	
-	3.	Trigger on price move back into 8 ema
+	3.	Wyzwalanie ceną z powrotem do 8 ema
 	
-	4.	Cancel trigger on price close past 21 ema
+	4.	Anuluj wyzwalacz po zamknięciu ceny w przeszłości 21 ema
 	
-	5.	entry at hi/lo of trigger candle +/- 3 pips
+	5.	wejście w hi/lo świecy wyzwalającej +/- 3 pips
 	
-	6.	sl at hi/lo of previous 5 bars +/- 3 pips
+	6.	sl przy hi/lo z poprzednich 5 świec +/- 3 pips
 	
 	7.	tp1 at 1:1 rr ratio
 	
-	8.	tp2 at 2:1 rr ratio or trailing stop at hi/lo previous 3 bars
+	8.	tp2 przy stosunku 2:1 rr lub trailing stop przy hi/lo poprzednich 3 słupkach
 
 */
 
