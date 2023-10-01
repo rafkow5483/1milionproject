@@ -104,7 +104,8 @@ input	int						InpEntryOffsetPoints				=	30;				//	Entry price offset
 
 
 //	For the tp/sl
-input	double					InpRatio					=	1.25;				//	P/L ratio
+input int InpTPPips = 20; // TP w puntkach
+input int InpSLPips = 20; // SL w punktach
 
 //	General items
 input	double					InpOrderSize			=	0.01;				//	Order size
@@ -342,11 +343,11 @@ void OnTick() {
 		
 			double entryPrice		=	iHigh(Symbol(), Period(), iHighest(Symbol(), Period(), MODE_HIGH, InpEntryLookback, 2));	//	2 from the example
 			entryPrice				+=	GEntryOffset;
-			double exitPrice		=	mainLo - GEntryOffset;	//	exit is offset from trigger bar
-			double tpPrice			=	entryPrice + ((entryPrice-exitPrice)*InpRatio);	//	Only using a single target, strategy has 2 targets
+         double slPrice = entryPrice - InpSLPips * _Point; // Fixed SL
+			double tpPrice = entryPrice + InpTPPips * _Point;
 			
 			gTarget.entryPrice	=	entryPrice;
-			gTarget.sl				=	exitPrice;
+			gTarget.sl				=	slPrice;
 			gTarget.tp				=	tpPrice;
 			gTarget.type			=	anchorMode;
 			
@@ -366,11 +367,11 @@ void OnTick() {
 		
 			double entryPrice		=	iLow(Symbol(), Period(), iLowest(Symbol(), Period(), MODE_LOW, InpEntryLookback, 2));	//	2 from the example
 			entryPrice				-=	GEntryOffset;
-			double exitPrice		=	mainHi + GEntryOffset;	//	exit is offset from trigger bar
-			double tpPrice			=	entryPrice + ((entryPrice-exitPrice)*InpRatio);;	//	Only using a single target, strategy has 2 targets
+         double slPrice = entryPrice - InpSLPips * _Point; // Fixed SL
+			double tpPrice = entryPrice + InpTPPips * _Point;
 			
 			gTarget.entryPrice	=	entryPrice;
-			gTarget.sl				=	exitPrice;
+			gTarget.sl				=	slPrice;
 			gTarget.tp				=	tpPrice;
 			gTarget.type			=	anchorMode;
 			
