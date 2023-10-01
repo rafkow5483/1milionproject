@@ -33,6 +33,29 @@
 */
 
 #ifdef __MQL5__
+	#include <Trade/PositionInfo.mqh>
+#endif
+
+class CPositionInfoCustom : public CPositionInfo {
+
+public:
+
+	int	Count(string symbol, long magic);
+
+};
+
+
+int	CPositionInfoCustom::Count(string symbol, long magic) {
+	int	result	=	0;
+	int	count		=	PositionsTotal();
+	for (int i=count-1; i>=0; i--) {
+		if (PositionGetTicket(i)<=0) continue;
+		if (CPositionInfo::Symbol()==symbol && CPositionInfo::Magic()==magic) result++;
+	}
+	return(result);
+}
+
+#ifdef __MQL5__
 	#include <Trade/Trade.mqh>
 #endif
 
