@@ -1,6 +1,6 @@
 /*
 
-	MultiTimeframeScalper.mq4
+	MultiTimeframeScalper.mq5
 	Copyright 2021, Orchard Forex
 	https://www.orchardforex.com
 
@@ -12,52 +12,25 @@
 #property strict
 
 /*
-	Zasady handlu
+	Trading Rules
 	
-	1.	Ustaw kierunek trendu przy użyciu wyższych ram czasowych 8 i 21 ema
+	1.	Set trend direction using higher timeframe 8 and 21 ema
 	
-	2.	Dopasuj trend w bieżącym przedziale czasowym 8, 13, 21 ema
+	2.	Match trend on current timeframe 8, 13, 21 ema
 	
-	3.	Wyzwalanie ceną z powrotem do 8 ema
+	3.	Trigger on price move back into 8 ema
 	
-	4.	Anuluj wyzwalacz po zamknięciu ceny w przeszłości 21 ema
+	4.	Cancel trigger on price close past 21 ema
 	
-	5.	wejście w hi/lo świecy wyzwalającej +/- 3 pips
+	5.	entry at hi/lo of trigger candle +/- 3 pips
 	
-	6.	sl przy hi/lo z poprzednich 5 świec +/- 3 pips
+	6.	sl at hi/lo of previous 5 bars +/- 3 pips
 	
-	7.	tp1 at 1:1 rr ratio.  linika 410
+	7.	tp1 at 1:1 rr ratio
 	
-	8.	tp2 przy stosunku 2:1 rr lub trailing stop przy hi/lo poprzednich 3 słupkach
+	8.	tp2 at 2:1 rr ratio or trailing stop at hi/lo previous 3 bars
 
 */
-
-#ifdef __MQL5__
-	#include <Trade/PositionInfo.mqh>
-#endif
-
-class CPositionInfoCustom : public CPositionInfo {
-
-public:
-
-	int	Count(string symbol, long magic);
-
-};
-
-
-#ifdef __MQL5__
-
-int	CPositionInfoCustom::Count(string symbol, long magic) {
-	int	result	=	0;
-	int	count		=	PositionsTotal();
-	for (int i=count-1; i>=0; i--) {
-		if (PositionGetTicket(i)<=0) continue;
-		if (CPositionInfo::Symbol()==symbol && CPositionInfo::Magic()==magic) result++;
-	}
-	return(result);
-}
-
-#endif
 
 #ifdef __MQL5__
 	#include <Trade/Trade.mqh>
@@ -66,8 +39,6 @@ int	CPositionInfoCustom::Count(string symbol, long magic) {
 class CTradeCustom : public CTrade {
 
 };
-
-
 CTradeCustom			Trade;
 CPositionInfoCustom	PositionInfo;
 
@@ -117,12 +88,11 @@ input	double					InpOrderSize			=	0.01;				//	Order size
 input	int						InpMagicNumber			=	212121;			//	Magic number
 input	string					InpTradeComment		=	__FILE__;		//	Trade comment
 
-//	Dla danych wejściowych wymagających jednorazowej konwersji
+//	For inputs that need one time conversion
 double	GEntryOffset;
 
-// W tym miejscu używam modułowych klas wskaźników
+// This is where I use the modular indicator classes
 //	Include the indicator classes
-
 
 class CIndicatorBase {
 
@@ -177,7 +147,6 @@ CIndicatorBase::~CIndicatorBase() {
 	
 }
 
-
 #ifdef __MQL5__
 
 	//	In mql5 get the array first then pull a single value
@@ -201,10 +170,6 @@ CIndicatorBase::~CIndicatorBase() {
 
 #endif
 
-/*
-	CIndicatorMA
-	Usage: CIndicatorMA MA = new CIndicatorMA(symbol, timeframe, period, method, appliedPrice)
-*/
 class CIndicatorMA : public CIndicatorBase {
 
 private:
@@ -224,9 +189,6 @@ public:
 
 	void			Init(string symbol, int timeframe, int period, ENUM_MA_METHOD method, int appliedPrice);
 	
-	#ifdef __MQL4__
-		double	GetValue(int bufferNumber, int index);
-	#endif
 	
 };
 
@@ -253,8 +215,6 @@ void		CIndicatorMA::Init(string symbol,int timeframe,int period,ENUM_MA_METHOD m
 	mInitialised		=	true;
 		
 }
-
-
 
 CIndicatorMA	MAAnchorFast;
 CIndicatorMA	MAAnchorSlow;
@@ -401,11 +361,6 @@ void OnTick() {
 	OpenAtTarget();	
 	
 }
-
-
-// ============================================================================
-// ============================================================================
-
 
 void	OpenAtTarget() {
 
