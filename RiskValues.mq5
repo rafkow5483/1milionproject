@@ -1,6 +1,4 @@
-
-#define VERSION "1.0"
-#property version VERSION
+property version VERSION
 
 #define PROJECT_NAME MQLInfoString(MQL_PROGRAM_NAME)
 
@@ -27,7 +25,8 @@ input int endMinute2 = 0;
 input int OrderDistPoints = 200;
 input int TpPoints = 200;
 input int SlPoints = 200;
-;
+input int TslPoints = 5;
+input int TslTriggerPoints = 5;
 
 input ENUM_TIMEFRAMES Timeframe = PERIOD_H1;
 input int BarsN = 5;
@@ -130,7 +129,7 @@ void OnTick(){
       }
    }
 }
-
+}
 
 void  OnTradeTransaction(
    const MqlTradeTransaction&    trans,
@@ -152,56 +151,40 @@ void  OnTradeTransaction(
    }
 }
 
-// Globalne zmienne do śledzenia początkowej ceny i poziomu SL
-double initialBuyPrice = 0;
-double initialSellPrice = 0;
-double trailingStopLoss = 0;
-
-// ...
-
 void processPos(ulong &posTicket){
    if(posTicket <= 0) return;
+   if(OrderSelect(posTicket)) return;
    
    CPositionInfo pos;
    if(!pos.SelectByTicket(posTicket)){
       posTicket = 0;
       return;
    } else {
-      if(pos.PositionType() == POSITION_TYPE_BUY && initialBuyPrice == 0){
-         initialBuyPrice = pos.PriceOpen();
-         trailingStopLoss = initialBuyPrice - SlPoints * _Point;
-      }
-      if(pos.PositionType() == POSITION_TYPE_SELL && initialSellPrice == 0){
-         initialSellPrice = pos.PriceOpen();
-         trailingStopLoss = initialSellPrice + SlPoints * _Point;
-      }
-      
-      updateTrailingStop(pos);
-   }
-}
-
-void updateTrailingStop(CPositionInfo &pos){
-   double currentPrice = (pos.PositionType() == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol,SYMBOL_BID) : SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-   double distance = 5 * _Point; // Dystans do aktywacji trailing stop-loss
-   double moveStep = 1 * _Point; // Krok przesunięcia SL
-
-   if(pos.PositionType() == POSITION_TYPE_BUY && currentPrice - initialBuyPrice >= distance){
-      double newStopLoss = initialBuyPrice + (currentPrice - initialBuyPrice - distance + moveStep);
-      if(newStopLoss > trailingStopLoss){
-         trailingStopLoss = newStopLoss;
-         trade.PositionModify(_Symbol, trailingStopLoss, pos.TakeProfit());
-      }
-   }
-   if(pos.PositionType() == POSITION_TYPE_SELL && initialSellPrice - currentPrice >= distance){
-      double newStopLoss = initialSellPrice - (initialSellPrice - currentPrice - distance + moveStep);
-      if(newStopLoss < trailingStopLoss){
-         trailingStopLoss = newStopLoss;
-         trade.PositionModify(_Symbol, trailingStopLoss, pos.TakeProfit());
+      if(pos.PositionType() == POSITION_TYPE_BUY){
+         double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
+         
+         if(bid > pos.PriceOpen() + TslTriggerPoints * _Point){
+            double sl = pos.PriceOpen() + 1 * _Point; // 1 punkt powyżej ceny otwarcia dla BUY
+            sl = NormalizeDouble(sl, _Digits);
+            
+            if(sl > pos.StopLoss()){
+               trade.PositionModify(pos.Ticket(), sl, pos.TakeProfit());
+            }
+         }
+      } else if(pos.PositionType() == POSITION_TYPE_SELL){
+         double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+         
+         if(ask < pos.PriceOpen() - TslTriggerPoints * _Point){
+            double sl = pos.PriceOpen() - 1 * _Point; // 1 punkt poniżej ceny otwarcia dla SELL
+            sl = NormalizeDouble(sl, _Digits);
+            
+            if(sl < pos.StopLoss() || pos.StopLoss() == 0){
+               trade.PositionModify(pos.Ticket(), sl, pos.TakeProfit());
+            }
+         }
       }
    }
 }
-
-
 
 void executeBuy(double high){
    double entry = NormalizeDouble(high - OrderOffsetPoints * _Point, _Digits); 
