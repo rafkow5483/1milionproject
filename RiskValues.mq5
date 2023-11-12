@@ -163,30 +163,38 @@ void processPos(ulong &posTicket){
       return;
    } else {
       double newSl = 0;
+      double profitPoints = 0;
 
       if(pos.PositionType() == POSITION_TYPE_BUY){
          double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
-         
-         // Nowa wartość SL dla pozycji BUY
-         newSl = bid - TslPoints * _Point;
-         newSl = NormalizeDouble(newSl, _Digits);
+         profitPoints = (bid - pos.OpenPrice()) / _Point;
+
+         if(profitPoints > TslTriggerPoints){
+            newSl = pos.OpenPrice() + _Point; // Ustawienie SL na 1 punkt zysku
+            newSl = bid - TslPoints * _Point; // Przesunięcie SL o TslPoints dla dalszego zabezpieczania zysku
+            newSl = NormalizeDouble(newSl, _Digits);
             
-         if(newSl > pos.StopLoss()){
-            trade.PositionModify(pos.Ticket(), newSl, pos.TakeProfit());
+            if(newSl > pos.StopLoss()){
+               trade.PositionModify(pos.Ticket(), newSl, pos.TakeProfit());
+            }
          }
       } else if(pos.PositionType() == POSITION_TYPE_SELL){
          double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-         
-         // Nowa wartość SL dla pozycji SELL
-         newSl = ask + TslPoints * _Point;
-         newSl = NormalizeDouble(newSl, _Digits);
+         profitPoints = (pos.OpenPrice() - ask) / _Point;
+
+         if(profitPoints > TslTriggerPoints){
+            newSl = pos.OpenPrice() - _Point; // Ustawienie SL na 1 punkt zysku
+            newSl = ask + TslPoints * _Point; // Przesunięcie SL o TslPoints dla dalszego zabezpieczania zysku
+            newSl = NormalizeDouble(newSl, _Digits);
             
-         if(newSl < pos.StopLoss() || pos.StopLoss() == 0){
-            trade.PositionModify(pos.Ticket(), newSl, pos.TakeProfit());
+            if(newSl < pos.StopLoss() || pos.StopLoss() == 0){
+               trade.PositionModify(pos.Ticket(), newSl, pos.TakeProfit());
+            }
          }
       }
    }
 }
+
 
 void executeBuy(double high){
    double entry = NormalizeDouble(high - OrderOffsetPoints * _Point, _Digits); 
