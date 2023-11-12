@@ -82,12 +82,23 @@ bool IsTimeToTrade() {
    int endHour = 14;
    int endMinute = 30;
 
+
+// Drugi przedział czasowy
+   int startHour2 = 14;
+   int startMinute2 = 0;
+   int endHour2 = 16;
+   int endMinute2 = 0;
+
    // Konwersja do minut od północy
-   int startTime = startHour * 60 + startMinute;
-   int endTime = endHour * 60 + endMinute;
+   int startTime1 = startHour1 * 60 + startMinute1;
+   int endTime1 = endHour1 * 60 + endMinute1;
+   int startTime2 = startHour2 * 60 + startMinute2;
+   int endTime2 = endHour2 * 60 + endMinute2;
    int currentTime = time.hour * 60 + time.min;
 
-   return (currentTime >= startTime && currentTime <= endTime);
+   // Sprawdzenie czy bieżący czas mieści się w jednym z przedziałów
+   return ((currentTime >= startTime1 && currentTime <= endTime1) || 
+           (currentTime >= startTime2 && currentTime <= endTime2));
 }
 
 
