@@ -10,6 +10,10 @@
 input double Lots = 1.0;
 input double RiskPercent = 2.0; //RiskPercent (0 = Fix)
 
+input bool enableTimePeriod1 = true; // Domyślnie włączone
+input bool enableTimePeriod2 = true; // Domyślnie włączone
+
+
 // Definicja zmiennych input dla czasów startu i końca
 input int startHour1 = 6;
 input int startMinute1 = 0;
@@ -84,20 +88,21 @@ void OnDeinit(const int reason){
 
 // Funkcja sprawdzająca, czy obecny czas mieści się w określonym przedziale
 bool IsTimeToTrade() {
-   MqlDateTime time;
-   TimeToStruct(TimeCurrent(), time);
+    MqlDateTime time;
+    TimeToStruct(TimeCurrent(), time);
 
+    // Konwersja do minut od północy
+    int startTime1 = startHour1 * 60 + startMinute1;
+    int endTime1 = endHour1 * 60 + endMinute1;
+    int startTime2 = startHour2 * 60 + startMinute2;
+    int endTime2 = endHour2 * 60 + endMinute2;
+    int currentTime = time.hour * 60 + time.min;
 
-   // Konwersja do minut od północy
-   int startTime1 = startHour1 * 60 + startMinute1;
-   int endTime1 = endHour1 * 60 + endMinute1;
-   int startTime2 = startHour2 * 60 + startMinute2;
-   int endTime2 = endHour2 * 60 + endMinute2;
-   int currentTime = time.hour * 60 + time.min;
+    bool inTimePeriod1 = (currentTime >= startTime1 && currentTime <= endTime1) && enableTimePeriod1;
+    bool inTimePeriod2 = (currentTime >= startTime2 && currentTime <= endTime2) && enableTimePeriod2;
 
-   // Sprawdzenie czy bieżący czas mieści się w jednym z przedziałów
-   return ((currentTime >= startTime1 && currentTime <= endTime1) || 
-           (currentTime >= startTime2 && currentTime <= endTime2));
+    // Sprawdzenie czy bieżący czas mieści się w aktywnych przedziałach
+    return inTimePeriod1 || inTimePeriod2;
 }
 
 
