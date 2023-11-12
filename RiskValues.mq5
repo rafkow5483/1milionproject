@@ -10,6 +10,17 @@
 input double Lots = 1.0;
 input double RiskPercent = 2.0; //RiskPercent (0 = Fix)
 
+// Definicja zmiennych input dla czasów startu i końca
+input int startHour1 = 6;
+input int startMinute1 = 0;
+input int endHour1 = 13;
+input int endMinute1 = 0;
+
+input int startHour2 = 15;
+input int startMinute2 = 0;
+input int endHour2 = 22;
+input int endMinute2 = 0;
+
 input int OrderDistPoints = 200;
 input int TpPoints = 200;
 input int SlPoints = 200;
@@ -76,18 +87,6 @@ bool IsTimeToTrade() {
    MqlDateTime time;
    TimeToStruct(TimeCurrent(), time);
 
-   // Ustawianie godzin rozpoczęcia i zakończenia handlu
-   int startHour = 10;
-   int startMinute = 30;
-   int endHour = 14;
-   int endMinute = 30;
-
-
-// Drugi przedział czasowy
-   int startHour2 = 14;
-   int startMinute2 = 0;
-   int endHour2 = 16;
-   int endMinute2 = 0;
 
    // Konwersja do minut od północy
    int startTime1 = startHour1 * 60 + startMinute1;
