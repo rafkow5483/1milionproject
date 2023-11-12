@@ -1,6 +1,5 @@
 
-
-#define VERSION "1.0". 
+#define VERSION "1.0"
 #property version VERSION
 
 #define PROJECT_NAME MQLInfoString(MQL_PROGRAM_NAME)
@@ -9,8 +8,6 @@
 
 input double Lots = 1.0;
 input double RiskPercent = 2.0; //RiskPercent (0 = Fix)
-// Nowa zmienna input do określenia liczby punktów powyżej najwyższej ceny
-input int BuyAboveHighPoints = 3; // Domyślnie ustawione na 3 punkty
 
 input bool enableTimePeriod1 = true; // Domyślnie włączone
 input bool enableTimePeriod2 = true; // Domyślnie włączone
@@ -198,10 +195,11 @@ void processPos(ulong &posTicket){
    }
 }
 
-void executeBuy(double highestHigh){
-   //  Ustawienie ceny wejścia 3 punkty poniżej najwyższej ceny
-   double entry = highestHigh - BuyAboveHighPoints * _Point; 
+void executeBuy(double entry){
    entry = NormalizeDouble(entry,_Digits);
+   
+   double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   if(ask > entry - OrderDistPoints * _Point) return;
    
    double tp = entry + TpPoints * _Point;
    tp = NormalizeDouble(tp,_Digits);
@@ -219,10 +217,11 @@ void executeBuy(double highestHigh){
    buyPos = trade.ResultOrder();
 }
 
-void executeSell(double lowestLow){
-   // Ustawienie ceny wejścia 3 punkty powyżej najniższej ceny
-   double entry = lowestLow + BuyAboveHighPoints * _Point; 
+void executeSell(double entry){
    entry = NormalizeDouble(entry,_Digits);  
+
+   double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   if(bid < entry + OrderDistPoints * _Point) return;
 
    double tp = entry - TpPoints * _Point;
    tp = NormalizeDouble(tp,_Digits);
