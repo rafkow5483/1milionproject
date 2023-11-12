@@ -29,7 +29,7 @@ input int TslTriggerPoints = 5;
 
 input ENUM_TIMEFRAMES Timeframe = PERIOD_H1;
 input int BarsN = 5;
-input int ExpirationHours = 50;
+input int ExpirationMinute = 15;
 
 input int Magic = 111;
 
@@ -206,7 +206,7 @@ void executeBuy(double entry){
    double lots = Lots;
    if(RiskPercent > 0) lots = calcLots(entry-sl);
    
-   datetime expiration = iTime(_Symbol,Timeframe,0) + ExpirationHours * PeriodSeconds(PERIOD_H1);
+   datetime expiration = iTime(_Symbol,Timeframe,0) + ExpirationMinute * PeriodSeconds(PERIOD_M1);
 
    trade.BuyStop(lots,entry,_Symbol,sl,tp,ORDER_TIME_SPECIFIED,expiration);
    
@@ -228,7 +228,7 @@ void executeSell(double entry){
    double lots = Lots;
    if(RiskPercent > 0) lots = calcLots(sl-entry);
   
-   datetime expiration = iTime(_Symbol,Timeframe,0) + ExpirationHours * PeriodSeconds(PERIOD_H1);
+   datetime expiration = iTime(_Symbol,Timeframe,0) + ExpirationMinute * PeriodSeconds(PERIOD_M1);
 
    trade.SellStop(lots,entry,_Symbol,sl,tp,ORDER_TIME_SPECIFIED,expiration);
    
