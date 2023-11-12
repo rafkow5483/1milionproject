@@ -1,6 +1,6 @@
 
 
-#define VERSION "1.0"
+#define VERSION "1.0" 
 #property version VERSION
 
 #define PROJECT_NAME MQLInfoString(MQL_PROGRAM_NAME)
