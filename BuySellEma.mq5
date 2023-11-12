@@ -304,5 +304,5 @@ void ApplyTrailingStop() {
         }
    }
 }
-Give feedback
+
 
