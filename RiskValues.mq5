@@ -196,11 +196,10 @@ void processPos(ulong &posTicket){
    }
 }
 
-void executeBuy(double entry){
+void executeBuy(double highestHigh){
+   // Ustawienie ceny wejścia 3 punkty poniżej najwyższej ceny
+   double entry = highestHigh - BuyAboveHighPoints * _Point; 
    entry = NormalizeDouble(entry,_Digits);
-   
-   double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-   if(ask > entry - OrderDistPoints * _Point) return;
    
    double tp = entry + TpPoints * _Point;
    tp = NormalizeDouble(tp,_Digits);
@@ -218,11 +217,10 @@ void executeBuy(double entry){
    buyPos = trade.ResultOrder();
 }
 
-void executeSell(double entry){
+void executeSell(double lowestLow){
+   // Ustawienie ceny wejścia 3 punkty powyżej najniższej ceny
+   double entry = lowestLow + BuyAboveHighPoints * _Point; 
    entry = NormalizeDouble(entry,_Digits);  
-
-   double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
-   if(bid < entry + OrderDistPoints * _Point) return;
 
    double tp = entry - TpPoints * _Point;
    tp = NormalizeDouble(tp,_Digits);
