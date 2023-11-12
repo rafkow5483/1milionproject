@@ -8,7 +8,7 @@
 
 input double Lots = 1.0;
 input double RiskPercent = 2.0; //RiskPercent (0 = Fix)
-
+input int OrderOffsetPoints = 3; // Dystans od high/low w punktach
 input bool enableTimePeriod1 = true; // Domyślnie włączone
 input bool enableTimePeriod2 = true; // Domyślnie włączone
 
@@ -196,7 +196,7 @@ void processPos(ulong &posTicket){
 }
 
 void executeBuy(double entry){
-   entry = NormalizeDouble(entry,_Digits);
+   double entry = high - OrderOffsetPoints * _Point;
    
    double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
    if(ask > entry - OrderDistPoints * _Point) return;
@@ -218,7 +218,7 @@ void executeBuy(double entry){
 }
 
 void executeSell(double entry){
-   entry = NormalizeDouble(entry,_Digits);  
+   double entry = low + OrderOffsetPoints * _Point;  
 
    double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
    if(bid < entry + OrderDistPoints * _Point) return;
@@ -258,27 +258,37 @@ double calcLots(double slPoints){
 double findHigh(){
    double highestHigh = 0;
    for(int i = 0; i < 200; i++){
-      double high = iHigh(_Symbol,Timeframe,i);
-      if(i > BarsN && iHighest(_Symbol,Timeframe,MODE_HIGH,BarsN*3+1,i-BarsN) == i){
-         if(high > highestHigh){
-            return high;
+      double high = iHigh(_Symbol, Timeframe, i);
+      if(i > BarsN && iHighest(_Symbol, Timeframe, MODE_HIGH, BarsN*3+1, i-BarsN) == i){
+         // Sprawdzanie, czy obecna wartość high minus dystans jest większa niż dotychczasowe najwyższe high
+         if(high - OrderOffsetPoints * _Point > highestHigh){
+            highestHigh = high;
          }
       }
-      highestHigh = MathMax(high,highestHigh);
    }
-   return -1;
+   // Jeśli nie znaleziono nowego high, zwróć -1
+   if(highestHigh == 0){
+      return -1;
+   }
+   // Zwróć znalezioną najwyższą wartość z uwzględnieniem dystansu
+   return highestHigh - OrderOffsetPoints * _Point;
 }
 
 double findLow(){
    double lowestLow = DBL_MAX;
    for(int i = 0; i < 200; i++){
-      double low = iLow(_Symbol,Timeframe,i);
-      if(i > BarsN && iLowest(_Symbol,Timeframe,MODE_LOW,BarsN*3+1,i-BarsN) == i){
-         if(low < lowestLow){
-            return low;
+      double low = iLow(_Symbol, Timeframe, i);
+      if(i > BarsN && iLowest(_Symbol, Timeframe, MODE_LOW, BarsN*3+1, i-BarsN) == i){
+         // Sprawdzanie, czy obecna wartość low plus dystans jest mniejsza niż dotychczasowe najniższe low
+         if(low + OrderOffsetPoints * _Point < lowestLow){
+            lowestLow = low;
          }
-      }   
-      lowestLow = MathMin(low,lowestLow);
+      }
    }
-   return -1;
+   // Jeśli nie znaleziono nowego low, zwróć -1
+   if(lowestLow == DBL_MAX){
+      return -1;
+   }
+   // Zwróć znalezioną najniższą wartość z uwzględnieniem dystansu
+   return lowestLow + OrderOffsetPoints * _Point;
 }
