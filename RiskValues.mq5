@@ -197,7 +197,7 @@ void processPos(ulong &posTicket){
 }
 
 void executeBuy(double highestHigh){
-   // Ustawienie ceny wejścia 3 punkty poniżej najwyższej ceny
+   //  Ustawienie ceny wejścia 3 punkty poniżej najwyższej ceny
    double entry = highestHigh - BuyAboveHighPoints * _Point; 
    entry = NormalizeDouble(entry,_Digits);
    
