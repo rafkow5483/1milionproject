@@ -164,27 +164,27 @@ void processPos(ulong &posTicket){
    if(!pos.SelectByTicket(posTicket)){
       posTicket = 0;
       return;
-   }else{
+   } else {
       if(pos.PositionType() == POSITION_TYPE_BUY){
          double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
          
          if(bid > pos.PriceOpen() + TslTriggerPoints * _Point){
-            double sl = bid - TslPoints * _Point;
-            sl = NormalizeDouble(sl,_Digits);
+            double sl = pos.PriceOpen() + 1 * _Point; // 1 punkt powyżej ceny otwarcia dla BUY
+            sl = NormalizeDouble(sl, _Digits);
             
             if(sl > pos.StopLoss()){
-               trade.PositionModify(pos.Ticket(),sl,pos.TakeProfit());
+               trade.PositionModify(pos.Ticket(), sl, pos.TakeProfit());
             }
          }
-      }else if(pos.PositionType() == POSITION_TYPE_SELL){
+      } else if(pos.PositionType() == POSITION_TYPE_SELL){
          double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
          
          if(ask < pos.PriceOpen() - TslTriggerPoints * _Point){
-            double sl = ask + TslPoints * _Point;
-            sl = NormalizeDouble(sl,_Digits);
+            double sl = pos.PriceOpen() - 1 * _Point; // 1 punkt poniżej ceny otwarcia dla SELL
+            sl = NormalizeDouble(sl, _Digits);
             
             if(sl < pos.StopLoss() || pos.StopLoss() == 0){
-               trade.PositionModify(pos.Ticket(),sl,pos.TakeProfit());
+               trade.PositionModify(pos.Ticket(), sl, pos.TakeProfit());
             }
          }
       }
