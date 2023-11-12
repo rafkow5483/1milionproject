@@ -113,31 +113,24 @@ void OnTick(){
    processPos(buyPos);
    processPos(sellPos);
 
-   // Reszta Twojego kodu...
-   // Kod odpowiedzialny za otwieranie nowych pozycji powinien być wykonywany tylko wtedy,
-   // gdy IsTimeToTrade() zwraca true.
-
-   processPos(buyPos);
-   processPos(sellPos);
-
    int bars = iBars(_Symbol,Timeframe);
    if(totalBars != bars){
       totalBars = bars;
       
-      if(buyPos <= 0){
-         double high = findHigh();
-         if(high > 0){
-            executeBuy(high);
-         }
+      // Zmienne do przechowywania wyszukiwanych wartości high i low
+      double high = findHigh();
+      double low = findLow();
+
+      // Warunki wywołania funkcji executeBuy i executeSell
+      if(buyPos <= 0 && high > 0){
+         executeBuy(high);
       }
       
-      if(sellPos <= 0){
-         double low = findLow();
-         if(low > 0){
-            executeSell(low);
-         }
+      if(sellPos <= 0 && low > 0){
+         executeSell(low);
       }
    }
+}
 }
 
 void  OnTradeTransaction(
@@ -195,8 +188,8 @@ void processPos(ulong &posTicket){
    }
 }
 
-void executeBuy(double entry){
-   double entry = high - OrderOffsetPoints * _Point;
+void executeBuy(double high){
+   double entry = NormalizeDouble(high - OrderOffsetPoints * _Point, _Digits); 
    
    double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
    if(ask > entry - OrderDistPoints * _Point) return;
@@ -217,8 +210,8 @@ void executeBuy(double entry){
    buyPos = trade.ResultOrder();
 }
 
-void executeSell(double entry){
-   double entry = low + OrderOffsetPoints * _Point;  
+ void executeSell(double low){
+   double entry = NormalizeDouble(low + OrderOffsetPoints * _Point, _Digits);   
 
    double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
    if(bid < entry + OrderDistPoints * _Point) return;
