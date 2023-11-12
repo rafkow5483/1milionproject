@@ -162,27 +162,27 @@ void processPos(ulong &posTicket){
       posTicket = 0;
       return;
    } else {
+      double newSl = 0;
+
       if(pos.PositionType() == POSITION_TYPE_BUY){
          double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
          
-         if(bid > pos.PriceOpen() + TslTriggerPoints * _Point){
-            double sl = pos.PriceOpen() + 1 * _Point; // 1 punkt powyżej ceny otwarcia dla BUY
-            sl = NormalizeDouble(sl, _Digits);
+         // Nowa wartość SL dla pozycji BUY
+         newSl = bid - TslPoints * _Point;
+         newSl = NormalizeDouble(newSl, _Digits);
             
-            if(sl > pos.StopLoss()){
-               trade.PositionModify(pos.Ticket(), sl, pos.TakeProfit());
-            }
+         if(newSl > pos.StopLoss()){
+            trade.PositionModify(pos.Ticket(), newSl, pos.TakeProfit());
          }
       } else if(pos.PositionType() == POSITION_TYPE_SELL){
          double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
          
-         if(ask < pos.PriceOpen() - TslTriggerPoints * _Point){
-            double sl = pos.PriceOpen() - 1 * _Point; // 1 punkt poniżej ceny otwarcia dla SELL
-            sl = NormalizeDouble(sl, _Digits);
+         // Nowa wartość SL dla pozycji SELL
+         newSl = ask + TslPoints * _Point;
+         newSl = NormalizeDouble(newSl, _Digits);
             
-            if(sl < pos.StopLoss() || pos.StopLoss() == 0){
-               trade.PositionModify(pos.Ticket(), sl, pos.TakeProfit());
-            }
+         if(newSl < pos.StopLoss() || pos.StopLoss() == 0){
+            trade.PositionModify(pos.Ticket(), newSl, pos.TakeProfit());
          }
       }
    }
