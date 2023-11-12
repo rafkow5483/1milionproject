@@ -131,7 +131,7 @@ void OnTick(){
       }
    }
 }
-}
+
 
 void  OnTradeTransaction(
    const MqlTradeTransaction&    trans,
