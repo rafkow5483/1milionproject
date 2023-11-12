@@ -1,4 +1,6 @@
-property version VERSION
+
+#define VERSION "1.0"
+#property version VERSION
 
 #define PROJECT_NAME MQLInfoString(MQL_PROGRAM_NAME)
 
@@ -25,8 +27,7 @@ input int endMinute2 = 0;
 input int OrderDistPoints = 200;
 input int TpPoints = 200;
 input int SlPoints = 200;
-input int TslPoints = 5;
-input int TslTriggerPoints = 5;
+;
 
 input ENUM_TIMEFRAMES Timeframe = PERIOD_H1;
 input int BarsN = 5;
@@ -129,7 +130,7 @@ void OnTick(){
       }
    }
 }
-}
+
 
 void  OnTradeTransaction(
    const MqlTradeTransaction&    trans,
@@ -160,31 +161,11 @@ void processPos(ulong &posTicket){
       posTicket = 0;
       return;
    } else {
-      if(pos.PositionType() == POSITION_TYPE_BUY){
-         double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
-         
-         if(bid > pos.PriceOpen() + TslTriggerPoints * _Point){
-            double sl = pos.PriceOpen() + 1 * _Point; // 1 punkt powyżej ceny otwarcia dla BUY
-            sl = NormalizeDouble(sl, _Digits);
-            
-            if(sl > pos.StopLoss()){
-               trade.PositionModify(pos.Ticket(), sl, pos.TakeProfit());
-            }
-         }
-      } else if(pos.PositionType() == POSITION_TYPE_SELL){
-         double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-         
-         if(ask < pos.PriceOpen() - TslTriggerPoints * _Point){
-            double sl = pos.PriceOpen() - 1 * _Point; // 1 punkt poniżej ceny otwarcia dla SELL
-            sl = NormalizeDouble(sl, _Digits);
-            
-            if(sl < pos.StopLoss() || pos.StopLoss() == 0){
-               trade.PositionModify(pos.Ticket(), sl, pos.TakeProfit());
-            }
-         }
-      }
+      // Usunięto kod związany z tslTriggerPoints i tslPoints
    }
 }
+
+
 
 void executeBuy(double high){
    double entry = NormalizeDouble(high - OrderOffsetPoints * _Point, _Digits); 
@@ -282,4 +263,3 @@ double findLow(){
    }
    // Zwróć znalezioną najniższą wartość z uwzględnieniem dystansu
    return lowestLow + OrderOffsetPoints * _Point;
-}
