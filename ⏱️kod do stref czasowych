@@ -33,4 +33,12 @@ bool IsTimeToTrade() {
     return inTimePeriod1 || inTimePeriod2;
 }
 
+void OnTick() {
+    // Sprawdzenie, czy handel jest dozwolony w bieżącym czasie
+    if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
+
+    // Reszta logiki handlowej...
+}
+
+
 
