@@ -1,0 +1,59 @@
+#include <Trade\Trade.mqh>
+CTrade trade;
+
+input int emaFastPeriodH1 = 8;
+input int emaSlowPeriodH1 = 21;
+input int emaFastPeriod = 5;
+input int emaSlowPeriod = 20;
+input double LotSize = 0.01;
+
+// Deklaracja zmiennych globalnych dla EMA
+double emaFastHigher, emaSlowHigher, emaFastCurrent, emaSlowCurrent;
+
+// Deklaracja zmiennych globalnych do przechowywania czasu ostatniego przecięcia na H1
+datetime lastCrossTimeH1 = 0;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    // Początkowe wartości EMA na H1 dla sprawdzenia pierwszego przecięcia
+    emaFastHigher = iMA(_Symbol, PERIOD_H1, emaFastPeriodH1, 1, MODE_EMA, PRICE_CLOSE);
+    emaSlowHigher = iMA(_Symbol, PERIOD_H1, emaSlowPeriodH1, 1, MODE_EMA, PRICE_CLOSE);
+    
+    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    // Bieżące wartości EMA dla H1
+    double emaFastHigherCurrent = iMA(_Symbol, PERIOD_H1, emaFastPeriodH1, 0, MODE_EMA, PRICE_CLOSE);
+    double emaSlowHigherCurrent = iMA(_Symbol, PERIOD_H1, emaSlowPeriodH1, 0, MODE_EMA, PRICE_CLOSE);
+
+    // Bieżące wartości EMA dla M15
+    emaFastCurrent = iMA(_Symbol, PERIOD_M15, emaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    emaSlowCurrent = iMA(_Symbol, PERIOD_M15, emaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
+
+    // Sprawdzenie, czy doszło do przecięcia na H1
+    if((emaFastHigher < emaSlowHigher && emaFastHigherCurrent > emaSlowHigherCurrent) || (emaFastHigher > emaSlowHigher && emaFastHigherCurrent < emaSlowHigherCurrent)) {
+        lastCrossTimeH1 = TimeCurrent(); // Aktualizacja czasu przecięcia na H1
+    }
+
+    // Aktualizacja wartości EMA dla H1
+    emaFastHigher = emaFastHigherCurrent;
+    emaSlowHigher = emaSlowHigherCurrent;
+
+    // Sprawdzenie, czy można otworzyć pozycję Sell na M15 po przecięciu na H1
+    if(emaFastCurrent < emaSlowCurrent && TimeCurrent() > lastCrossTimeH1 && lastCrossTimeH1 > 0) {
+        // Sprawdzenie, czy nie istnieje już otwarta pozycja Sell dla danego symbolu
+        if(!PositionSelect(_Symbol) || PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_SELL) {
+            // Otwarcie pozycji Sell
+            trade.Sell(LotSize, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_ASK), 0, 0, "Sell after H1 cross");
+        }
+    }
+}
+
