@@ -35,18 +35,18 @@ struct STargetPrice {
 // Some inputs
 // Moving average
 input ENUM_TIMEFRAMES InpAnchorTimeframe = PERIOD_M5; // Anchor Timeframe
-input int InpAnchorFastPeriod = 5; // Anchor Fast MA Period
+input int InpAnchorFastPeriod = 25; // Anchor Fast MA Period
 input ENUM_MA_METHOD InpAnchorFastMethod = MODE_SMA; // Anchor Fast MA Method
 input ENUM_APPLIED_PRICE InpAnchorFastAppliedPrice = PRICE_CLOSE; // Anchor Fast MA Applied price
-input int InpAnchorSlowPeriod = 50; // Anchor Slow MA Period
+input int InpAnchorSlowPeriod = 175; // Anchor Slow MA Period
 input ENUM_MA_METHOD InpAnchorSlowMethod = MODE_SMA; // Anchor Slow MA Method
 input ENUM_APPLIED_PRICE InpAnchorSlowAppliedPrice = PRICE_CLOSE; // Anchor Slow MA Applied price
 
 // Main 3 averages
-input int InpMainFastPeriod = 25; // Main Fast MA Period
+input int InpMainFastPeriod = 4; // Main Fast MA Period
 input ENUM_MA_METHOD InpMainFastMethod = MODE_SMA; // Main Fast MA Method
 input ENUM_APPLIED_PRICE InpMainFastAppliedPrice = PRICE_CLOSE; // Main Fast MA Applied price
-input int InpMainSlowPeriod = 250; // Main Slow MA Period
+input int InpMainSlowPeriod = 30; // Main Slow MA Period
 input ENUM_MA_METHOD InpMainSlowMethod = MODE_SMA; // Main Slow MA Method
 input ENUM_APPLIED_PRICE InpMainSlowAppliedPrice = PRICE_CLOSE; // Main Slow MA Applied price
 
