@@ -1,488 +1,315 @@
-#property copyright "Copyright 2023"
-#property link " https://www.breakout.com"
-#property version "1.00"
+#property copyright "Copyright 2021, Orchard Forex"
+#property link      "https://www.orchardforex.com"
+#property version   "1.00"
+#property strict
 
-//=====================================
-//=====================================
+#include <Trade/Trade.mqh>
+class CTradeCustom : public CTrade {};
 
-#include <Trade\Trade.mqh>
- 
-//=====================================
-//=====================================
+#include <Trade/PositionInfo.mqh>
+class CPositionInfoCustom : public CPositionInfo {
+public:
+    int Count(string symbol, long magic);
+};
 
-input group "==== General Inputs ===="
-input long InpMagicNumber = 12345;          // magic number
-input double InpLots = 0.01;                         // lot size
-input int InpStopLoss = 150;                         // stop loss
-input int InpTakeProfit = 200 ;                        // take profit
+CTradeCustom Trade;
+CPositionInfoCustom PositionInfo;
 
-input group "==== Range Inputs ===="
-input int InpRangeStart = 600;                       // range start time in minutes
-input int InpRangeDuration = 120;                 // range duration in minutes
-input int InpRangeClose = 1200;                   // range close time in minutes (-1=off)
-
-//=====================================
-//=====================================
-
-enum BREAKOUT_MODE_ENUM 
-    {
-        ONE_SIGNAL,                                       // one breakout per range
-        TWO_SIGNAL                                       // high and low breakout
-    };
-
-input BREAKOUT_MODE_ENUM InpBreakoutMode = ONE_SIGNAL;  // breakout mode
-
-input group "==== Day of week filter ====";
-input bool InpMonday = true;                      // range on monday
-input bool InpTuesday   = true;                    // range on thuesday
-input bool InpWednesday = true;                 // range on Wednesday
-input bool InpThursday  = true;                    // range on Thursday
-input bool InpFriday = true;                          // range on Friday
-
-//=====================================
-//=====================================
-
-struct RANGE_STRUCT
-    {
-        datetime start_time;                             // start of the range
-        datetime end_time;                              // end of the range 
-        datetime close_time;                           // close time
-        double high;                                        // high of the range 
-        double low;                                         // low of the range
-        bool f_entry;                                       // flag if we are inside the range
-        bool f_high_breakout;                        // flag if a high breakout occurred
-        bool f_low_breakout;                         // flag if low breakout occurred
-
-        RANGE_STRUCT()  :  start_time(0) ,end_time(0) ,close_time(0) ,high(0) ,low(DBL_MAX), f_entry(false) ,f_high_breakout(false) ,f_low_breakout(false) {};
-    
-    };
-
-RANGE_STRUCT range;
-MqlTick prevTick, lastTick;
-CTrade trade;
-
-//=====================================
-//=====================================
-
-int OnInit()
-    {
-
-        // check user inputs
-        if(!CheckInputs()) {return INIT_PARAMETERS_INCORRECT;}
-
-        trade.SetExpertMagicNumber(InpMagicNumber);  
-
-        if(_UninitReason==REASON_PARAMETERS && CountOpenPositions ()==0)
-            {
-                
-                CalculateRange();
-
-            }
-
-    // draw objects
-    DrawObjects();
-
-    return(INIT_SUCCEEDED);
-
+int CPositionInfoCustom::Count(string symbol, long magic) {
+    int result = 0;
+    int count = PositionsTotal();
+    for (int i = count - 1; i >= 0; i--) {
+        if (PositionGetTicket(i) <= 0) continue;
+        if (CPositionInfo::Symbol() == symbol && CPositionInfo::Magic() == magic) result++;
+    }
+    return (result);
 }
 
-//=====================================
-//=====================================
+struct STargetPrice {
+    ENUM_ORDER_TYPE type;
+    double entryPrice;
+    double sl;
+    double tp;
+};
 
- void OnDeinit(const int reason)
-    {
-         
-          // delete objects
-         ObjectsDeleteAll(NULL,"range");
+// Some inputs
+// Moving average
+input ENUM_TIMEFRAMES InpAnchorTimeframe = PERIOD_M5; // Anchor Timeframe
+input int InpAnchorFastPeriod = 5; // Anchor Fast MA Period
+input ENUM_MA_METHOD InpAnchorFastMethod = MODE_SMA; // Anchor Fast MA Method
+input ENUM_APPLIED_PRICE InpAnchorFastAppliedPrice = PRICE_CLOSE; // Anchor Fast MA Applied price
+input int InpAnchorSlowPeriod = 50; // Anchor Slow MA Period
+input ENUM_MA_METHOD InpAnchorSlowMethod = MODE_SMA; // Anchor Slow MA Method
+input ENUM_APPLIED_PRICE InpAnchorSlowAppliedPrice = PRICE_CLOSE; // Anchor Slow MA Applied price
 
+// Main 3 averages
+input int InpMainFastPeriod = 25; // Main Fast MA Period
+input ENUM_MA_METHOD InpMainFastMethod = MODE_SMA; // Main Fast MA Method
+input ENUM_APPLIED_PRICE InpMainFastAppliedPrice = PRICE_CLOSE; // Main Fast MA Applied price
+input int InpMainSlowPeriod = 250; // Main Slow MA Period
+input ENUM_MA_METHOD InpMainSlowMethod = MODE_SMA; // Main Slow MA Method
+input ENUM_APPLIED_PRICE InpMainSlowAppliedPrice = PRICE_CLOSE; // Main Slow MA Applied price
+
+// Input point High/Low of previous candles
+input int InpEntryLookback = 50; // Entry price lookback
+input int InpEntryOffsetPoints = -20; // Entry price offset
+
+// For the tp/sl
+input double InpRatio = 1.25; // P/L ratio
+
+// General items
+input double InpOrderSize = 0.01; // Order size
+input int InpMagicNumber = 212121; // Magic number
+input string InpTradeComment = __FILE__; // Trade comment
+
+// For inputs that need one time conversion
+double GEntryOffset;
+
+// This is where I use the modular indicator classes
+// Include the indicator classes
+#property copyright "Copyright 2021, Orchard Forex"
+#property link      "https://orchardforex.com"
+#property version   "1.00"
+
+class CIndicatorBase {
+private:
+protected:
+    // Control values
+    bool mInitialised;
+    // Values used by MQL4
+    string mSymbol;
+    int mTimeframe;
+    // Handle and buffer used by MQL5
+    int mHandle;
+    double mBuffer[];
+
+public:
+    CIndicatorBase();
+    ~CIndicatorBase();
+    bool IsValid() { return (mHandle != INVALID_HANDLE); }
+    int GetArray(int bufferNumber, int start, int count, double &arr[]); // Retrieve an array of values
+    virtual double GetValue(int bufferNumber, int index); // Retrieve a single value
+    virtual double GetValue(int index) { return (GetValue(0, index)); } // Some indicators have only 1 buffer
+};
+
+CIndicatorBase::CIndicatorBase() {
+    // Set initialised to false, the child classes should fix this
+    mInitialised = false;
+    // Init the common values, basically to say this hasn't been initialised
+    mSymbol = Symbol();
+    mTimeframe = Period();
+    // Child classes will set the handle
+    mHandle = 0;
+    ArraySetAsSeries(mBuffer, true);
+}
+
+CIndicatorBase::~CIndicatorBase() {
+#ifdef __MQL5__
+    IndicatorRelease(mHandle);
+#endif
+}
+
+#ifdef __MQL5__
+double CIndicatorBase::GetValue(int bufferNumber, int index) {
+    int result = CopyBuffer(mHandle, bufferNumber, index, 1, mBuffer);
+    if (result < 1) return (0);
+    return (mBuffer[0]);
+}
+
+int CIndicatorBase::GetArray(int bufferNumber, int start, int count, double &arr[]) {
+    ArraySetAsSeries(arr, true);
+    int result = CopyBuffer(mHandle, bufferNumber, start, count, arr);
+    return (result);
+}
+#endif
+
+class CIndicatorMA : public CIndicatorBase {
+private:
+protected:
+    int mPeriod;
+    int mShift;
+    ENUM_MA_METHOD mMethod;
+    int mAppliedPrice;
+
+public:
+    CIndicatorMA() : CIndicatorBase() {};
+    CIndicatorMA(string symbol, int timeframe, int period, ENUM_MA_METHOD method, int appliedPrice);
+    ~CIndicatorMA();
+    void Init(string symbol, int timeframe, int period, ENUM_MA_METHOD method, int appliedPrice);
+};
+
+CIndicatorMA::CIndicatorMA(string symbol, int timeframe, int period, ENUM_MA_METHOD method, int appliedPrice)
+    : CIndicatorBase() {
+    Init(symbol, timeframe, period, method, appliedPrice);
+}
+
+CIndicatorMA::~CIndicatorMA() {}
+
+void CIndicatorMA::Init(string symbol, int timeframe, int period, ENUM_MA_METHOD method, int appliedPrice) {
+    mSymbol = symbol;
+    mTimeframe = timeframe;
+    mPeriod = period;
+    mShift = 0;
+    mMethod = method;
+    mAppliedPrice = appliedPrice;
+#ifdef __MQL5__
+    mHandle = iMA(symbol, (ENUM_TIMEFRAMES)timeframe, period, 0, method, appliedPrice);
+#endif
+    mInitialised = true;
+}
+
+CIndicatorMA MAAnchorFast;
+CIndicatorMA MAAnchorSlow;
+CIndicatorMA MAMainFast;
+CIndicatorMA MAMainSlow;
+STargetPrice gTarget;
+
+int OnInit() {
+    if (PeriodSeconds(InpAnchorTimeframe) <= PeriodSeconds(Period())) {
+        PrintFormat("You must select an anchor timeframe higher than the current chart. Current=%s, selected=%s", EnumToString((ENUM_TIMEFRAMES)Period()), EnumToString(InpAnchorTimeframe));
+        return (INIT_PARAMETERS_INCORRECT);
     }
 
-//=====================================
-//=====================================
+    GEntryOffset = InpEntryOffsetPoints * SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+    Trade.SetExpertMagicNumber(InpMagicNumber);
+    MAAnchorFast.Init(Symbol(), InpAnchorTimeframe, InpAnchorFastPeriod, InpAnchorFastMethod, InpAnchorFastAppliedPrice);
+    MAAnchorSlow.Init(Symbol(), InpAnchorTimeframe, InpAnchorSlowPeriod, InpAnchorSlowMethod, InpAnchorSlowAppliedPrice);
+    MAMainFast.Init(Symbol(), Period(), InpMainFastPeriod, InpMainFastMethod, InpMainFastAppliedPrice);
+    MAMainSlow.Init(Symbol(), Period(), InpMainSlowPeriod, InpMainSlowMethod, InpMainSlowAppliedPrice);
+    NewBar();
+    gTarget.entryPrice = 0;
+    return (INIT_SUCCEEDED);
+}
 
-void OnTick()
-    {
+void OnDeinit(const int reason) {
+    // Nothing to do here now, common toolbox took care of it
+}
 
-        // Get current tick
-        prevTick = lastTick;
-        SymbolInfoTick(_Symbol,lastTick);
+void OnTick() {
+    // Sprawdzenie, czy handel jest dozwolony
+    if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return;
+    if (!MQLInfoInteger(MQL_TRADE_ALLOWED)) return;
+    if (!AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return;
+    if (!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return;
 
-        // range calculation
-       if(lastTick.time >= range.start_time && lastTick.time < range.end_time)
-           {
+    // Pobieranie wartości kotwicy dla szybkiej i wolnej średniej kroczącej
+    double anchorFast = MAAnchorFast.GetValue(1);
+    double anchorSlow = MAAnchorSlow.GetValue(1);
 
-            // set flag
-            range.f_entry = true;
+    // Sprawdzanie trendu na wyższym interwale czasowym
+    bool upTrend = anchorFast > anchorSlow;
+    bool downTrend = anchorFast < anchorSlow;
 
-            // new high
-            if(lastTick.ask > range.high)
-               {
-                   range.high = lastTick.ask;
-                   DrawObjects();
-          
-               }
+    double mainFast = MAMainFast.GetValue(1);
+    double mainSlow = MAMainSlow.GetValue(1);
 
-           // new low
-           if(lastTick.bid < range.low)
-               {
-           
-                   range.low = lastTick.bid;
-                   DrawObjects();
-                }
-           }
+    static double lastMainFastValue = MAMainFast.GetValue(2);
+    static double lastMainSlowValue = MAMainSlow.GetValue(2);
 
-    //close positions
-    if(InpRangeClose>=0 && lastTick.time >= range.close_time)
-       {
-           
-            if(!ClosePositions()) {return;}
-        
+    // Sprawdzenie przecięcia średnich kroczących na niższym interwale czasowym dla zamykania pozycji
+    CheckForCrossAndClose();
+
+    // Sprawdzenie przecięcia średnich kroczących na niższym interwale czasowym dla otwierania pozycji
+    if ((lastMainFastValue < lastMainSlowValue && mainFast > mainSlow && upTrend) ||
+        (lastMainFastValue > lastMainSlowValue && mainFast < mainSlow && downTrend)) {
+        // Jeśli nastąpiło przecięcie
+        ENUM_ORDER_TYPE tradeType = (mainFast > mainSlow) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+
+        // Otwórz nową pozycję
+        PrepareTrade(tradeType);
+    }
+
+    // Aktualizacja wartości dla następnego ticka
+    lastMainFastValue = mainFast;
+    lastMainSlowValue = mainSlow;
+}
+
+void PrepareTrade(ENUM_ORDER_TYPE type) {
+    double price = (type == ORDER_TYPE_BUY) ? SymbolAsk() : SymbolBid();
+    double sl = (type == ORDER_TYPE_BUY) ? price - 500 * _Point : price + 500 * _Point;
+    double tp = (type == ORDER_TYPE_BUY) ? price + 500 * _Point : price - 500 * _Point;
+
+    if (!Trade.PositionOpen(Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment)) {
+        PrintFormat("Error %i placing order type %s", GetLastError(), EnumToString(type));
+    }
+}
+
+
+void OpenAtTarget() {
+    if (gTarget.entryPrice == 0) return;
+    if (gTarget.type == ORDER_TYPE_BUY) {
+        if (SymbolAsk() >= gTarget.entryPrice) {
+            OpenTrade();
+            gTarget.entryPrice = 0;
         }
-
-    // calculate new range if…
-    if(((InpRangeClose>=0 && lastTick.time>=range.close_time)
-     || (range.f_high_breakout && range.f_low_breakout)
-     || (range.end_time==0)
-     || (range.end_time!=0 && lastTick.time>range.end_time && !range.f_entry))
-     && CountOpenPositions() ==0)
-         {
-
-            CalculateRange();
-
-         }
-
-    // check for breakouts
-    CheckBreakouts();
-
-}
-
-// check user inputs
-bool CheckInputs()
-    {
-
-        if(InpMagicNumber <= 0)
-            {
-                Alert("Magicnumber <= 0");
-                return false;
-            }
-
-        if(InpLots <= 0 || InpLots > 1)
-            {
-                Alert("Lots <= 0 or > 1");
-                return false;
-            }
-
-        if(InpStopLoss<0 || InpStopLoss>1000)
-            { 
-                Alert("Stop loss < 0 or stop loss > 1000");
-                return false;
-            }
-        if(InpTakeProfit<0 || InpTakeProfit>1000)
-            { 
-                Alert("Take profit < 0 or take profit > 1000");
-                return false;
-            }
-
-        if(InpRangeClose<0 && InpStopLoss==0)
-            { 
-                Alert("Close time and stoploss is off");
-                return false;
-            }
-
-        if(InpRangeStart < 0 || InpRangeStart  >= 1440)
-            { 
-                Alert("Range start < 0 or >= 1440");
-                return false;
-            }
-
-        if(InpRangeDuration <= 0 || InpRangeDuration >= 1440)
-            { 
-                Alert("Range duration <= 0 or >= 1440");
-                return false;
-            }
-        
-        if(InpRangeClose >= 1440 || (InpRangeStart+InpRangeDuration)%1440 == InpRangeClose)
-            { 
-                Alert("Close time >= 1440 or end time == close");
-                return false;
-            }
-
-        if(InpMonday+InpTuesday+InpWednesday+InpThursday+InpFriday==0)
-            {
-                Alert("Range is prohibited on all days of the week");
-                return false;
-            } 
-
-   return true;
-
-}
-
-//=====================================
-//=====================================
-
-
-void CalculateRange()
-{
-
-     range.start_time = 0;
-     range.end_time = 0;
-     range.close_time = 0;
-     range.high = 0.0;
-     range.low = DBL_MAX; 
-     range.f_entry = false;
-     range.f_high_breakout = false;
-     range.f_low_breakout = false;
-
-
-int time_cycle = 86400;
-range.start_time = (lastTick.time - (lastTick.time % time_cycle)) + InpRangeStart*60;
-for(int i=0; i<8; i++){
-    MqlDateTime tmp;
-    TimeToStruct(range.start_time,tmp);
-    int dow = tmp.day_of_week;
-    if(lastTick.time>=range.start_time  || dow==6  || dow==0 || (dow==1 && !InpMonday) || (dow==2 && !InpTuesday) || (dow==3 && !InpWednesday) || (dow==4 && !InpThursday) || (dow==5 && !InpFriday)){ range.start_time += time_cycle;
-    }
-}
-    
-
-//calculate range end time       
-range.end_time = range.start_time + InpRangeDuration*60;
-for(int i=0; i<2; i++)
-    {
-        MqlDateTime tmp;
-        TimeToStruct(range.end_time,tmp);
-        int dow = tmp.day_of_week;
-        if(dow==6 || dow==0)
-            {
-                range.end_time += time_cycle;
-             }
-    }
-
-// calculate range close
-if(InpRangeClose>=0)
-    {
-        range.close_time = (range.end_time - (range.end_time % time_cycle)) + InpRangeClose*60;
-         for(int i=0; i<3; i++)
-             {
-                 MqlDateTime tmp;
-                 TimeToStruct(range.close_time,tmp);
-                 int dow = tmp.day_of_week;
-                 if(range.close_time<=range.end_time || dow==6 ||  dow==0)
-                     {
-                         range.close_time += time_cycle;
-                      }
-               }
-      }
-
-// draw objects
-DrawObjects();
-}
-
-// Count all open positions
-int CountOpenPositions()
-    {
-
-        int counter = 0;
-        int total = PositionsTotal();
-        for(int i=total-1; i>=0; i--)
-            {
-                 ulong ticket = PositionGetTicket(1);
-                 if(ticket<=0)
-            {
-                Print("Failed to get positions ticket"); return -1;
-            }
-        if(!PositionSelectByTicket(ticket))
-           {
-               Print("Failed to select position by ticket")  ; return -1;
-           }
-          ulong magicnumber;
-          if(!PositionGetInteger(POSITION_MAGIC,magicnumber))
-              {
-                   Print("Failed to get position magicnumber"); return -1;
-              }
-          if(InpMagicNumber==magicnumber)
-             {
-                 counter++;
-             }
+    } else {
+        if (SymbolBid() <= gTarget.entryPrice) {
+            OpenTrade();
+            gTarget.entryPrice = 0;
         }
-
-return counter;
-
+    }
 }
 
-//=====================================
-//=====================================
+void OpenTrade() {
+    if (gTarget.entryPrice == 0) return;
+    ENUM_ORDER_TYPE type = gTarget.type;
+    double price = NormalizeDouble(gTarget.entryPrice, Digits());
+    double sl = NormalizeDouble(gTarget.sl, Digits());
+    double tp = NormalizeDouble(gTarget.tp, Digits());
 
-
-// Check for breakouts
-void CheckBreakouts()
-{
-
-    // check if we are afterthe range end
-    if(lastTick.time >= range.end_time && range.end_time>0 && range.f_entry)
-       {
-            // check for high breakout
-            if(!range.f_high_breakout && lastTick.ask >= range.high)
-                {
-                     range.f_high_breakout = true;
-                     if(InpBreakoutMode==ONE_SIGNAL) {range.f_low_breakout = true;}
-
-
-                      // calculate stop loss and take profit
-                     double sl = InpStopLoss == 0 ? 0 : NormalizeDouble(lastTick.bid -  ((range.high-range.low) * InpStopLoss * 0.01),_Digits);
-
-                    double tp = InpTakeProfit == 0 ? 0 : NormalizeDouble(lastTick.bid + (( range.high-range.low) * InpTakeProfit * 0.01),_Digits);
-
-trade.PositionOpen(_Symbol,ORDER_TYPE_BUY,InpLots,lastTick.ask,sl,tp,"Time range Ea");
+    if (!Trade.PositionOpen(Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment)) {
+        PrintFormat("Error %i placing order type %s", GetLastError(), EnumToString(type));
+    }
 }
 
+void CheckForCrossAndClose() {
+    double mainFast = MAMainFast.GetValue(1);
+    double mainSlow = MAMainSlow.GetValue(1);
 
-    
-            // check for low breakout
-            if(!range.f_low_breakout && lastTick.bid <= range.low)
-                {
-                     range.f_low_breakout = true;
-                     if(InpBreakoutMode==ONE_SIGNAL) {range.f_high_breakout = true;}
+    static double lastMainFastValue = MAMainFast.GetValue(2);
+    static double lastMainSlowValue = MAMainSlow.GetValue(2);
 
+    if (lastMainFastValue < lastMainSlowValue && mainFast > mainSlow) {
+        // Przecięcie w górę - zamknij pozycję SELL
+        CloseOppositePosition(ORDER_TYPE_BUY);
+    } else if (lastMainFastValue > lastMainSlowValue && mainFast < mainSlow) {
+        // Przecięcie w dół - zamknij pozycję BUY
+        CloseOppositePosition(ORDER_TYPE_SELL);
+    }
 
-                      // calculate stop loss and take profit
-                     double sl = InpStopLoss == 0 ? 0 : NormalizeDouble(lastTick.ask + ((range.high-range.low) * InpStopLoss * 0.01),_Digits);
-
-                    double tp = InpTakeProfit == 0 ? 0 : NormalizeDouble(lastTick.ask - (( range.high-range.low) * InpTakeProfit * 0.01),_Digits);
-
-trade.PositionOpen(_Symbol,ORDER_TYPE_SELL,InpLots,lastTick.bid,sl,tp,"Time range Ea");
-}
-}
-}
-
-// Close all open positions
-bool ClosePositions()
-{
-
-        int total = PositionsTotal ();
-        for(int i=total-1; i>=0; i--)
-           {
-              if(total!=PositionsTotal())
-                  {
-                       total=PositionsTotal(); i=total; continue;
-                   }
-         ulong ticket = PositionGetTicket(1);
-         if(ticket<=0)
-             
-                   {
-                       Print("Failed to get position ticket"); 
-                       return false;
-                   }
-              if(!PositionSelectByTicket(ticket))
-                   {
-                       Print("Failed to select position by ticket"); 
-                       return false;
-                   }
-              long magicnumber;
-              if(!PositionGetInteger(POSITION_MAGIC,magicnumber))
-                  {
-                       Print("Failed to get position magicnumber"); 
-                       return false;
-                   }
-               if(magicnumber == InpMagicNumber)
-                   { 
-                       trade.PositionClose(ticket);
-
-                       if(trade.ResultRetcode()!=TRADE_RETCODE_DONE)
-                          {
-                              Print(  "Failed to close positions. Result:  "+(string)trade.ResultRetcode()+":"+trade.ResultRetcodeDescription() );
-                            return false;
-                           }
-                    }
-           } 
-
-   return true;
-
+    // Aktualizacja wartości dla następnego ticka
+    lastMainFastValue = mainFast;
+    lastMainSlowValue = mainSlow;
 }
 
-//=====================================
-//=====================================
-
-// draw chart objects
-void DrawObjects()
-{
-
-     // start time 
-     ObjectDelete(NULL,"range start");
-     if(range.start_time>0)
-         {
-             ObjectCreate(NULL,"range start",OBJ_VLINE,0,range.start_time,0);
-             ObjectSetString(NULL,"range start",OBJPROP_TOOLTIP,"start of the range \n"+TimeToString(range.start_time,TIME_DATE|TIME_MINUTES));
-             ObjectSetInteger(NULL,"range start",OBJPROP_COLOR,clrBlue);
-             ObjectSetInteger(NULL,"range start",OBJPROP_WIDTH,2);
-             ObjectSetInteger(NULL,"range start",OBJPROP_BACK,true);
-
-}
-
-// end time
-ObjectDelete(NULL,"range end");
-if(range.end_time>0)
-    {
-        ObjectCreate(NULL,"range end",OBJ_VLINE,0,range.end_time,0);
-        ObjectSetString(NULL,"range end",OBJPROP_TOOLTIP,"end of the range \n"+TimeToString(range.end_time,TIME_DATE|TIME_MINUTES));
-        ObjectSetInteger(NULL,"range end",OBJPROP_COLOR,clrBlue);
-        ObjectSetInteger(NULL,"range end",OBJPROP_WIDTH,2) ; 
-        ObjectSetInteger(NULL,"range end",OBJPROP_BACK,true); 
-      }
-
-
-
-
-// close time 
-ObjectDelete(NULL,"range close");
-if(range.close_time>0)
-    {
-        ObjectCreate(NULL,"range close",OBJ_VLINE,0,range.close_time,0);
-        ObjectSetString(NULL,"range close",OBJPROP_TOOLTIP,"close of the range \n"+TimeToString(range.close_time,TIME_DATE|TIME_MINUTES));
-        ObjectSetInteger(NULL,"range close",OBJPROP_COLOR,clrRed); 
-        ObjectSetInteger(NULL,"range close",OBJPROP_WIDTH,2) ; 
-        ObjectSetInteger(NULL,"range close",OBJPROP_BACK,true); 
+void CloseOppositePosition(ENUM_ORDER_TYPE type) {
+    ENUM_POSITION_TYPE oppositeType = (type == ORDER_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+    for (int i = PositionsTotal() - 1; i >= 0; i--) {
+        if (PositionGetTicket(i) > 0 && PositionGetInteger(POSITION_TYPE) == oppositeType && PositionGetString(POSITION_SYMBOL) == Symbol()) {
+            Trade.PositionClose(PositionGetInteger(POSITION_TICKET));
+        }
+    }
 }
 
 
-
-
-// high
-ObjectsDeleteAll(NULL,"range high");
-if(range.high>0)
-    {
-      ObjectCreate(NULL,"range high",OBJ_TREND,0,range.start_time,range.high,range.end_time,range.high);
-      ObjectSetString(NULL,"range high",OBJPROP_TOOLTIP,"high of the range \n"+DoubleToString(range.high,_Digits));
-       ObjectSetInteger(NULL,"range high",OBJPROP_COLOR,clrBlue); 
-       ObjectSetInteger(NULL,"range high",OBJPROP_WIDTH,2) ; 
-       ObjectSetInteger(NULL,"range high",OBJPROP_BACK,true); 
-
-
-    ObjectCreate(NULL,"range high",OBJ_TREND,0,range.end_time,range.high,InpRangeClose>=0 ? range.close_time : INT_MAX,range.high);
-    ObjectSetString(NULL,"range high",OBJPROP_TOOLTIP,"high of the range \n"+DoubleToString(range.high,_Digits));
-    ObjectSetInteger(NULL,"range high" ,OBJPROP_COLOR,clrBlue); 
-    ObjectSetInteger(NULL,"range high",OBJPROP_STYLE,STYLE_DOT) ; 
-    ObjectSetInteger(NULL,"range high",OBJPROP_BACK,true); 
+bool NewBar() {
+    static datetime prevTime = 0;
+    datetime now = iTime(Symbol(), Period(), 0);
+    if (now == prevTime) return (false);
+    prevTime = now;
+    return (true);
 }
 
-// low
-ObjectsDeleteAll(NULL,"range low");
-if(range.low<DBL_MAX)
-    {
-       ObjectCreate(NULL,"range low",OBJ_TREND,0,range.start_time,range.low,range.end_time,range.low);
-       ObjectSetString(NULL,"range low",OBJPROP_TOOLTIP,"low of the range \n"+DoubleToString(range.low,_Digits));
-       ObjectSetInteger(NULL,"range low",OBJPROP_COLOR,clrBlue); 
-       ObjectSetInteger(NULL,"range low",OBJPROP_WIDTH,2) ; 
-       ObjectSetInteger(NULL,"range low",OBJPROP_BACK,true); 
-
-
-    ObjectCreate(NULL,"range low",OBJ_TREND,0,range.end_time,range.low,InpRangeClose>=0 ? range.close_time : INT_MAX,range.low);
-    ObjectSetString(NULL,"range low",OBJPROP_TOOLTIP,"low of the range \n"+DoubleToString(range.low,_Digits));
-    ObjectSetInteger(NULL,"range low" ,OBJPROP_COLOR,clrBlue); 
-    ObjectSetInteger(NULL,"range low",OBJPROP_STYLE,STYLE_DOT) ; 
-    ObjectSetInteger(NULL,"range low",OBJPROP_BACK,true); 
+bool WaitForHTF(string symbol, ENUM_TIMEFRAMES timeframe) {
+    for (int waitCount = 9; waitCount >= 0; waitCount--) {
+        datetime t = iTime(symbol, timeframe, 0);
+        int err = GetLastError();
+        if (t > 0) return (true);
+        Sleep(100);
+    }
+    return (false);
 }
 
-// refresh chart
-ChartRedraw();
-}
+// Symbol values - also a candidate for common toolbox
+double SymbolAsk() { return (SymbolInfoDouble(Symbol(), SYMBOL_ASK)); }
+double SymbolBid() { return (SymbolInfoDouble(Symbol(), SYMBOL_BID)); }
