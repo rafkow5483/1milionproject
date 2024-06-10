@@ -35,18 +35,18 @@ struct STargetPrice {
 // Some inputs
 // Moving average
 input ENUM_TIMEFRAMES InpAnchorTimeframe = PERIOD_M5; // Anchor Timeframe
-input int InpAnchorFastPeriod = 5; // Anchor Fast MA Period
+input int InpAnchorFastPeriod = 25; // Anchor Fast MA Period
 input ENUM_MA_METHOD InpAnchorFastMethod = MODE_SMA; // Anchor Fast MA Method
 input ENUM_APPLIED_PRICE InpAnchorFastAppliedPrice = PRICE_CLOSE; // Anchor Fast MA Applied price
-input int InpAnchorSlowPeriod = 50; // Anchor Slow MA Period
+input int InpAnchorSlowPeriod = 175; // Anchor Slow MA Period
 input ENUM_MA_METHOD InpAnchorSlowMethod = MODE_SMA; // Anchor Slow MA Method
 input ENUM_APPLIED_PRICE InpAnchorSlowAppliedPrice = PRICE_CLOSE; // Anchor Slow MA Applied price
 
 // Main 3 averages
-input int InpMainFastPeriod = 25; // Main Fast MA Period
+input int InpMainFastPeriod = 4; // Main Fast MA Period
 input ENUM_MA_METHOD InpMainFastMethod = MODE_SMA; // Main Fast MA Method
 input ENUM_APPLIED_PRICE InpMainFastAppliedPrice = PRICE_CLOSE; // Main Fast MA Applied price
-input int InpMainSlowPeriod = 250; // Main Slow MA Period
+input int InpMainSlowPeriod = 30; // Main Slow MA Period
 input ENUM_MA_METHOD InpMainSlowMethod = MODE_SMA; // Main Slow MA Method
 input ENUM_APPLIED_PRICE InpMainSlowAppliedPrice = PRICE_CLOSE; // Main Slow MA Applied price
 
@@ -54,6 +54,25 @@ input ENUM_APPLIED_PRICE InpMainSlowAppliedPrice = PRICE_CLOSE; // Main Slow MA 
 input int InpEntryLookback = 50; // Entry price lookback
 input int InpEntryOffsetPoints = -20; // Entry price offset
 
+// For the tp/sl/breakeven
+input int InpStopLossPoints = 500; // Stop Loss in points
+input int InpTakeProfitPoints = 1000; // Take Profit in points
+input int InpBreakEvenPoints = 20; // Break Even in points
+input int InpBreakEvenOffsetPoints = 0; // Offset in points for Break Even
+
+input bool enableTimePeriod1 = true; // Domyślnie włączone
+input bool enableTimePeriod2 = false; // Domyślnie włączone
+
+// Definicja zmiennych input dla czasów startu i końca
+input int startHour1 = 16;
+input int startMinute1 = 0;
+input int endHour1 = 22;
+input int endMinute1 = 0;
+
+input int startHour2 = 15;
+input int startMinute2 = 0;
+input int endHour2 = 22;
+input int endMinute2 = 0;
 // For the tp/sl
 input double InpRatio = 1.25; // P/L ratio
 
@@ -61,6 +80,7 @@ input double InpRatio = 1.25; // P/L ratio
 input double InpOrderSize = 0.01; // Order size
 input int InpMagicNumber = 212121; // Magic number
 input string InpTradeComment = __FILE__; // Trade comment
+bool wasCrossDuringBlock = false;
 
 // For inputs that need one time conversion
 double GEntryOffset;
@@ -192,6 +212,12 @@ void OnTick() {
     if (!AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return;
     if (!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return;
 
+    bool timeToTrade = IsTimeToTrade();
+    if (!timeToTrade) {
+        wasCrossDuringBlock = false;
+        return;
+    }
+
     // Pobieranie wartości kotwicy dla szybkiej i wolnej średniej kroczącej
     double anchorFast = MAAnchorFast.GetValue(1);
     double anchorSlow = MAAnchorSlow.GetValue(1);
@@ -206,28 +232,54 @@ void OnTick() {
     static double lastMainFastValue = MAMainFast.GetValue(2);
     static double lastMainSlowValue = MAMainSlow.GetValue(2);
 
-    // Sprawdzenie przecięcia średnich kroczących na niższym interwale czasowym
+    // Sprawdzenie przecięcia średnich kroczących na niższym interwale czasowym dla zamykania pozycji
+    CheckForCrossAndClose();
+
+    // Sprawdzenie przecięcia średnich kroczących na niższym interwale czasowym dla otwierania pozycji
     if ((lastMainFastValue < lastMainSlowValue && mainFast > mainSlow && upTrend) ||
         (lastMainFastValue > lastMainSlowValue && mainFast < mainSlow && downTrend)) {
-        // Jeśli nastąpiło przecięcie
-        ENUM_ORDER_TYPE tradeType = (mainFast > mainSlow) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-        PrepareTrade(tradeType); // Przygotowanie do otwarcia pozycji
+        
+        if (!timeToTrade) {
+            wasCrossDuringBlock = true;
+        } else if (wasCrossDuringBlock) {
+            wasCrossDuringBlock = false; // reset flag
+        } else {
+            // Jeśli nastąpiło przecięcie
+            ENUM_ORDER_TYPE tradeType = (mainFast > mainSlow) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+            // Otwórz nową pozycję
+            PrepareTrade(tradeType);
+        }
     }
+
+    // Wywołaj funkcję przesuwania StopLoss do BreakEven
+    MoveStopLossToBreakEven();
 
     // Aktualizacja wartości dla następnego ticka
     lastMainFastValue = mainFast;
     lastMainSlowValue = mainSlow;
 }
 
+
+
+
 void PrepareTrade(ENUM_ORDER_TYPE type) {
+    // Sprawdzenie, czy jest już otwarta pozycja
+    if (PositionInfo.Count(Symbol(), InpMagicNumber) > 0) {
+        Print("There is already an open position. No new position will be opened.");
+        return;
+    }
+
     double price = (type == ORDER_TYPE_BUY) ? SymbolAsk() : SymbolBid();
-    double sl = (type == ORDER_TYPE_BUY) ? price - 500 * _Point : price + 500 * _Point;
-    double tp = (type == ORDER_TYPE_BUY) ? price + 500 * _Point : price - 500 * _Point;
+    double sl = (type == ORDER_TYPE_BUY) ? price - InpStopLossPoints * _Point : price + InpStopLossPoints * _Point;
+    double tp = (type == ORDER_TYPE_BUY) ? price + InpTakeProfitPoints * _Point : price - InpTakeProfitPoints * _Point;
 
     if (!Trade.PositionOpen(Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment)) {
         PrintFormat("Error %i placing order type %s", GetLastError(), EnumToString(type));
     }
 }
+
+
+
 
 void OpenAtTarget() {
     if (gTarget.entryPrice == 0) return;
@@ -253,6 +305,70 @@ void OpenTrade() {
 
     if (!Trade.PositionOpen(Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment)) {
         PrintFormat("Error %i placing order type %s", GetLastError(), EnumToString(type));
+    }
+}
+
+void CheckForCrossAndClose() {
+    double mainFast = MAMainFast.GetValue(1);
+    double mainSlow = MAMainSlow.GetValue(1);
+
+    static double lastMainFastValue = MAMainFast.GetValue(2);
+    static double lastMainSlowValue = MAMainSlow.GetValue(2);
+
+    if (lastMainFastValue < lastMainSlowValue && mainFast > mainSlow) {
+        // Przecięcie w górę - zamknij pozycję SELL
+        CloseOppositePosition(ORDER_TYPE_BUY);
+    } else if (lastMainFastValue > lastMainSlowValue && mainFast < mainSlow) {
+        // Przecięcie w dół - zamknij pozycję BUY
+        CloseOppositePosition(ORDER_TYPE_SELL);
+    }
+
+    // Aktualizacja wartości dla następnego ticka
+    lastMainFastValue = mainFast;
+    lastMainSlowValue = mainSlow;
+}
+
+void CloseOppositePosition(ENUM_ORDER_TYPE type) {
+    ENUM_POSITION_TYPE oppositeType = (type == ORDER_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+    for (int i = PositionsTotal() - 1; i >= 0; i--) {
+        if (PositionGetTicket(i) > 0 && PositionGetInteger(POSITION_TYPE) == oppositeType && PositionGetString(POSITION_SYMBOL) == Symbol()) {
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            if (profit > 0) {
+                Trade.PositionClose(PositionGetInteger(POSITION_TICKET));
+            }
+        }
+    }
+}
+
+bool IsTimeToTrade() {
+    MqlDateTime time;
+    TimeToStruct(TimeCurrent(), time);
+
+    // Konwersja do minut od północy
+    int startTime1 = startHour1 * 60 + startMinute1;
+    int endTime1 = endHour1 * 60 + endMinute1;
+    int startTime2 = startHour2 * 60 + startMinute2;
+    int endTime2 = endHour2 * 60 + endMinute2;
+    int currentTime = time.hour * 60 + time.min;
+
+    bool inTimePeriod1 = (currentTime >= startTime1 && currentTime <= endTime1) && enableTimePeriod1;
+    bool inTimePeriod2 = (currentTime >= startTime2 && currentTime <= endTime2) && enableTimePeriod2;
+
+    // Sprawdzenie czy bieżący czas mieści się w aktywnych przedziałach
+    return inTimePeriod1 || inTimePeriod2;
+}
+
+void MoveStopLossToBreakEven() {
+    for (int i = PositionsTotal() - 1; i >= 0; i--) {
+        if (PositionGetTicket(i) > 0 && PositionGetString(POSITION_SYMBOL) == Symbol()) {
+            double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            double currentPrice = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? SymbolBid() : SymbolAsk();
+            double distance = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
+            if (distance >= InpBreakEvenPoints * SymbolInfoDouble(Symbol(), SYMBOL_POINT)) {
+                double breakEvenPrice = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? entryPrice + InpBreakEvenOffsetPoints * SymbolInfoDouble(Symbol(), SYMBOL_POINT) : entryPrice - InpBreakEvenOffsetPoints * SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+                Trade.PositionModify(PositionGetInteger(POSITION_TICKET), breakEvenPrice, PositionGetDouble(POSITION_TP));
+            }
+        }
     }
 }
 
