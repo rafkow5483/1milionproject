@@ -1,3 +1,4 @@
+
 /*
 
 	MultiTimeframeScalper.mq4
@@ -32,6 +33,20 @@
 
 */
 
+/*
+
+	TradeCustom.mqh
+	Copyright 2021, Orchard Forex 
+	https://orchardforex.com 
+
+*/
+
+#property copyright "Copyright 2021, Orchard Forex"
+#property link      "https://orchardforex.com"
+#property version   "1.00"
+#property strict
+
+
 #ifdef __MQL4__
 	class CPositionInfo {};
 #endif
@@ -47,7 +62,9 @@ public:
 
 };
 
-
+#ifdef __MQL4__
+	#include "PositionInfoCustom_mql4.mqh"
+#endif
 int	CPositionInfoCustom::Count(string symbol, long magic) {
 	int	result	=	0;
 	int	count		=	PositionsTotal();
@@ -57,6 +74,12 @@ int	CPositionInfoCustom::Count(string symbol, long magic) {
 	}
 	return(result);
 }
+
+
+
+#ifdef __MQL4__
+	#include "Trade_mql4.mqh"
+#endif
 #ifdef __MQL5__
 	#include <Trade/Trade.mqh>
 #endif
@@ -64,6 +87,11 @@ int	CPositionInfoCustom::Count(string symbol, long magic) {
 class CTradeCustom : public CTrade {
 
 };
+
+
+
+
+
 CTradeCustom			Trade;
 CPositionInfoCustom	PositionInfo;
 
@@ -77,30 +105,32 @@ struct STargetPrice {
 
 //	Some inputs
 //	Moving average
-input	ENUM_TIMEFRAMES		InpAnchorTimeframe				=	PERIOD_M5;		//	Anchor Timeframe
+input	ENUM_TIMEFRAMES		InpAnchorTimeframe				=	PERIOD_H1;		//	Anchor Timeframe
 
-input	int						InpAnchorFastPeriod				=	2;				//	Anchor Fast MA Period
-input	ENUM_MA_METHOD			InpAnchorFastMethod				=	MODE_SMA;		//	Anchor Fast MA Method
+input	int						InpAnchorFastPeriod				=	8;				//	Anchor Fast MA Period
+input	ENUM_MA_METHOD			InpAnchorFastMethod				=	MODE_EMA;		//	Anchor Fast MA Method
 input	ENUM_APPLIED_PRICE	InpAnchorFastAppliedPrice		=	PRICE_CLOSE;	//	Anchor Fast MA Applied price
 
-input	int						InpAnchorSlowPeriod				=	10;				//	Anchor Slow MA Period
-input	ENUM_MA_METHOD			InpAnchorSlowMethod				=	MODE_SMA;		//	Anchor Slow MA Method
+input	int						InpAnchorSlowPeriod				=	21;				//	Anchor Slow MA Period
+input	ENUM_MA_METHOD			InpAnchorSlowMethod				=	MODE_EMA;		//	Anchor Slow MA Method
 input	ENUM_APPLIED_PRICE	InpAnchorSlowAppliedPrice		=	PRICE_CLOSE;	//	Anchor Slow MA Applied price
 
 //	Main 3 averages
-input	int						InpMainFastPeriod					=	10;				//	Main Fast MA Period
-input	ENUM_MA_METHOD			InpMainFastMethod					=	MODE_SMA;		//	Main Fast MA Method
+input	int						InpMainFastPeriod					=	8;				//	Main Fast MA Period
+input	ENUM_MA_METHOD			InpMainFastMethod					=	MODE_EMA;		//	Main Fast MA Method
 input	ENUM_APPLIED_PRICE	InpMainFastAppliedPrice			=	PRICE_CLOSE;	//	Main Fast MA Applied price
 
+input	int						InpMainMidPeriod					=	13;				//	Main Mid MA Period
+input	ENUM_MA_METHOD			InpMainMidMethod					=	MODE_EMA;		//	Main Mid MA Method
+input	ENUM_APPLIED_PRICE	InpMainMidAppliedPrice			=	PRICE_CLOSE;	//	Main Mid MA Applied price
 
-
-input	int						InpMainSlowPeriod					=	50;				//	Main Slow MA Period
-input	ENUM_MA_METHOD			InpMainSlowMethod					=	MODE_SMA;		//	Main Slow MA Method
+input	int						InpMainSlowPeriod					=	21;				//	Main Slow MA Period
+input	ENUM_MA_METHOD			InpMainSlowMethod					=	MODE_EMA;		//	Main Slow MA Method
 input	ENUM_APPLIED_PRICE	InpMainSlowAppliedPrice			=	PRICE_CLOSE;	//	Main Slow MA Applied price
 
 //	Input point High/Low of previous candles
 input int						InpEntryLookback					=	5;					//	Entry price lookback
-input	int						InpEntryOffsetPoints				=	-200;				//	Entry price offset
+input	int						InpEntryOffsetPoints				=	30;				//	Entry price offset
 
 
 //	For the tp/sl
@@ -112,18 +142,19 @@ input	int						InpMagicNumber			=	212121;			//	Magic number
 input	string					InpTradeComment		=	__FILE__;		//	Trade comment
 
 input bool enableTimePeriod1 = true; // Domyślnie włączone
-input bool enableTimePeriod2 = false; // Domyślnie włączone
+input bool enableTimePeriod2 = true; // Domyślnie włączone
 
 // Definicja zmiennych input dla czasów startu i końca
-input int startHour1 = 20;
-input int startMinute1 = 30;
-input int endHour1 = 23;
+input int startHour1 = 6;
+input int startMinute1 = 0;
+input int endHour1 = 13;
 input int endMinute1 = 0;
 
 input int startHour2 = 15;
 input int startMinute2 = 0;
 input int endHour2 = 22;
 input int endMinute2 = 0;
+
 
 // Funkcja sprawdzająca, czy obecny czas mieści się w określonym przedziale
 bool IsTimeToTrade() {
@@ -143,7 +174,6 @@ bool IsTimeToTrade() {
     // Sprawdzenie czy bieżący czas mieści się w aktywnych przedziałach
     return inTimePeriod1 || inTimePeriod2;
 }
-
 
 //	For inputs that need one time conversion
 double	GEntryOffset;
@@ -203,7 +233,26 @@ CIndicatorBase::~CIndicatorBase() {
 	
 }
 
+#ifdef __MQL4__
 
+	//	Just a blank function for the base class
+	double	CIndicatorBase::GetValue(int bufferNumber, int index) {
+		return(0);
+	}
+
+	//	For mql4 we have to build up the array from individual calls
+	int		CIndicatorBase::GetArray(int bufferNumber,int start,int count,double &arr[]) {
+	
+		ArraySetAsSeries(arr, true);
+		ArrayResize(arr, count);
+		for (int i=0; i<count; i++) {
+			arr[i]	=	GetValue(bufferNumber, i+start);
+		}
+		return(count);
+		
+	}
+
+#endif
 
 #ifdef __MQL5__
 
@@ -321,6 +370,7 @@ int OnInit() {
 	MAAnchorSlow.Init(Symbol(), InpAnchorTimeframe, InpAnchorSlowPeriod, InpAnchorSlowMethod, InpAnchorSlowAppliedPrice);
 
 	MAMainFast.Init(Symbol(), Period(), InpMainFastPeriod, InpMainFastMethod, InpMainFastAppliedPrice);
+	MAMainMid.Init(Symbol(), Period(), InpMainMidPeriod, InpMainMidMethod, InpMainMidAppliedPrice);
 	MAMainSlow.Init(Symbol(), Period(), InpMainSlowPeriod, InpMainSlowMethod, InpMainSlowAppliedPrice);
 
 	NewBar();					//	Just sets up prev time to avoid trading when first opened
@@ -344,6 +394,7 @@ void OnTick() {
 	if (!AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return;
 	if (!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return;
 	if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
+
 	
 	if (!NewBar()) {
 		OpenAtTarget();							//	If the trigger is already set test if target reached
@@ -375,6 +426,7 @@ void OnTick() {
 	//	This is where the strategy talks about the ma fanning out
 	//	I've kept it simple to just being aligned
 	double	mainFast		=	MAMainFast.GetValue(1);
+	double	mainMid		=	MAMainMid.GetValue(1);
 	double	mainSlow		=	MAMainSlow.GetValue(1);
 	double	mainClose	=	iClose(Symbol(), Period(), 1);
 	double	mainHi		=	iHigh(Symbol(), Period(), 1);
