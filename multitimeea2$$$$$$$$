@@ -1,0 +1,556 @@
+
+/*
+
+	MultiTimeframeScalper.mq4
+	Copyright 2021, Orchard Forex
+	https://www.orchardforex.com
+
+*/
+
+#property copyright "Copyright 2021, Orchard Forex"
+#property link      "https://www.orchardforex.com"
+#property version   "1.00"
+#property strict
+
+/*
+	Trading Rules
+	
+	1.	Set trend direction using higher timeframe 8 and 21 ema
+	
+	2.	Match trend on current timeframe 8, 13, 21 ema
+	
+	3.	Trigger on price move back into 8 ema
+	
+	4.	Cancel trigger on price close past 21 ema
+	
+	5.	entry at hi/lo of trigger candle +/- 3 pips
+	
+	6.	sl at hi/lo of previous 5 bars +/- 3 pips
+	
+	7.	tp1 at 1:1 rr ratio
+	
+	8.	tp2 at 2:1 rr ratio or trailing stop at hi/lo previous 3 bars
+
+*/
+
+/*
+
+	TradeCustom.mqh
+	Copyright 2021, Orchard Forex 
+	https://orchardforex.com 
+
+*/
+
+#property copyright "Copyright 2021, Orchard Forex"
+#property link      "https://orchardforex.com"
+#property version   "1.00"
+#property strict
+
+
+#ifdef __MQL4__
+	class CPositionInfo {};
+#endif
+#ifdef __MQL5__
+	#include <Trade/PositionInfo.mqh>
+#endif
+
+class CPositionInfoCustom : public CPositionInfo {
+
+public:
+
+	int	Count(string symbol, long magic);
+
+};
+
+#ifdef __MQL4__
+	#include "PositionInfoCustom_mql4.mqh"
+#endif
+int	CPositionInfoCustom::Count(string symbol, long magic) {
+	int	result	=	0;
+	int	count		=	PositionsTotal();
+	for (int i=count-1; i>=0; i--) {
+		if (PositionGetTicket(i)<=0) continue;
+		if (CPositionInfo::Symbol()==symbol && CPositionInfo::Magic()==magic) result++;
+	}
+	return(result);
+}
+
+
+
+#ifdef __MQL4__
+	#include "Trade_mql4.mqh"
+#endif
+#ifdef __MQL5__
+	#include <Trade/Trade.mqh>
+#endif
+
+class CTradeCustom : public CTrade {
+
+};
+
+
+
+
+
+CTradeCustom			Trade;
+CPositionInfoCustom	PositionInfo;
+
+struct STargetPrice {
+	ENUM_ORDER_TYPE	type;
+	double				entryPrice;
+	double				sl;
+	double				tp;
+};
+
+
+//	Some inputs
+//	Moving average
+input	ENUM_TIMEFRAMES		InpAnchorTimeframe				=	PERIOD_M5;		//	Anchor Timeframe
+
+input	int						InpAnchorFastPeriod				=	2;				//	Anchor Fast MA Period
+input	ENUM_MA_METHOD			InpAnchorFastMethod				=	MODE_SMMA;		//	Anchor Fast MA Method
+input	ENUM_APPLIED_PRICE	InpAnchorFastAppliedPrice		=	PRICE_CLOSE;	//	Anchor Fast MA Applied price
+
+input	int						InpAnchorSlowPeriod				=	20;				//	Anchor Slow MA Period
+input	ENUM_MA_METHOD			InpAnchorSlowMethod				=	MODE_SMMA;		//	Anchor Slow MA Method
+input	ENUM_APPLIED_PRICE	InpAnchorSlowAppliedPrice		=	PRICE_CLOSE;	//	Anchor Slow MA Applied price
+
+//	Main 3 averages
+input	int						InpMainFastPeriod					=	8;				//	Main Fast MA Period
+input	ENUM_MA_METHOD			InpMainFastMethod					=	MODE_SMMA;		//	Main Fast MA Method
+input	ENUM_APPLIED_PRICE	InpMainFastAppliedPrice			=	PRICE_CLOSE;	//	Main Fast MA Applied price
+
+input	int						InpMainMidPeriod					=	13;				//	Main Mid MA Period
+input	ENUM_MA_METHOD			InpMainMidMethod					=	MODE_SMMA;		//	Main Mid MA Method
+input	ENUM_APPLIED_PRICE	InpMainMidAppliedPrice			=	PRICE_CLOSE;	//	Main Mid MA Applied price
+
+input	int						InpMainSlowPeriod					=	21;				//	Main Slow MA Period
+input	ENUM_MA_METHOD			InpMainSlowMethod					=	MODE_SMMA;		//	Main Slow MA Method
+input	ENUM_APPLIED_PRICE	InpMainSlowAppliedPrice			=	PRICE_CLOSE;	//	Main Slow MA Applied price
+
+//	Input point High/Low of previous candles
+input int						InpEntryLookback					=	5;					//	Entry price lookback
+input	int						InpEntryOffsetPoints				=	30;				//	Entry price offset
+
+
+//	For the tp/sl
+
+
+//	General items
+input	double					InpOrderSize			=	0.01;				//	Order size
+input	int						InpMagicNumber			=	212121;			//	Magic number
+input	string					InpTradeComment		=	__FILE__;		//	Trade comment
+input int InpFixedSlPips = 100;
+input int InpFixedTpPips = 100;
+input bool enableTimePeriod1 = true; // Domyślnie włączone
+input bool enableTimePeriod2 = true; // Domyślnie włączone
+
+// Definicja zmiennych input dla czasów startu i końca
+input int startHour1 = 1;
+input int startMinute1 = 0;
+input int endHour1 = 14;
+input int endMinute1 = 25;
+
+input int startHour2 = 14;
+input int startMinute2 = 35;
+input int endHour2 = 23;
+input int endMinute2 = 0;
+
+
+// Funkcja sprawdzająca, czy obecny czas mieści się w określonym przedziale
+bool IsTimeToTrade() {
+    MqlDateTime time;
+    TimeToStruct(TimeCurrent(), time);
+
+    // Konwersja do minut od północy
+    int startTime1 = startHour1 * 60 + startMinute1;
+    int endTime1 = endHour1 * 60 + endMinute1;
+    int startTime2 = startHour2 * 60 + startMinute2;
+    int endTime2 = endHour2 * 60 + endMinute2;
+    int currentTime = time.hour * 60 + time.min;
+
+    bool inTimePeriod1 = (currentTime >= startTime1 && currentTime <= endTime1) && enableTimePeriod1;
+    bool inTimePeriod2 = (currentTime >= startTime2 && currentTime <= endTime2) && enableTimePeriod2;
+
+    // Sprawdzenie czy bieżący czas mieści się w aktywnych przedziałach
+    return inTimePeriod1 || inTimePeriod2;
+}
+
+//	For inputs that need one time conversion
+double	GEntryOffset;
+double GFixedSl;
+double GFixedTp;
+// This is where I use the modular indicator classes
+//	Include the indicator classes
+class CIndicatorBase {
+
+private:
+
+protected:
+
+	//	Control values
+	bool		mInitialised;
+	
+	//	Values used by MQL4
+	string	mSymbol;
+	int		mTimeframe;
+
+	//	Handle and buffer used by MQL5	
+	int		mHandle;
+	double	mBuffer[];
+
+public:
+
+   CIndicatorBase();
+   ~CIndicatorBase();
+   
+   bool		IsValid()	{	return(mHandle!=INVALID_HANDLE);	}
+	int		GetArray(int bufferNumber, int start, int count, double &arr[]);	//	Retrieve an array of values
+	virtual double	GetValue(int bufferNumber, int index);								//	Retrieve a single value
+	virtual double	GetValue(int index)	{	return(GetValue(0,index));	}			//	Some indicators have only 1 buffer
+
+   
+};
+
+CIndicatorBase::CIndicatorBase() {
+
+	//	Set initialised to false, the child classes should fix this
+	mInitialised	=	false;
+	
+	//	Init the common values, basically to say this hasn't been initialised
+	mSymbol			=	Symbol();
+	mTimeframe		=	Period();
+	
+	//	child classes will set the handle
+	mHandle	=	0;
+	ArraySetAsSeries(mBuffer, true);
+	
+}
+
+CIndicatorBase::~CIndicatorBase() {
+
+	#ifdef __MQL5__
+		IndicatorRelease(mHandle);
+	#endif 
+	
+}
+
+#ifdef __MQL4__
+
+	//	Just a blank function for the base class
+	double	CIndicatorBase::GetValue(int bufferNumber, int index) {
+		return(0);
+	}
+
+	//	For mql4 we have to build up the array from individual calls
+	int		CIndicatorBase::GetArray(int bufferNumber,int start,int count,double &arr[]) {
+	
+		ArraySetAsSeries(arr, true);
+		ArrayResize(arr, count);
+		for (int i=0; i<count; i++) {
+			arr[i]	=	GetValue(bufferNumber, i+start);
+		}
+		return(count);
+		
+	}
+
+#endif
+
+#ifdef __MQL5__
+
+	//	In mql5 get the array first then pull a single value
+	//	Could be done by calling GetArray but there is no need
+	double	CIndicatorBase::GetValue(int bufferNumber, int index) {
+	
+		int	result	=	CopyBuffer(mHandle, bufferNumber, index, 1, mBuffer);
+		if (result<1) return(0);
+		return(mBuffer[0]);
+		
+	}
+
+	//	For mql5 the array is the natural return	
+	int		CIndicatorBase::GetArray(int bufferNumber,int start,int count,double &arr[]) {
+	
+		ArraySetAsSeries(arr, true);
+		int	result	=	CopyBuffer(mHandle, bufferNumber, start, count, arr);
+		return(result);
+		
+	}
+
+#endif
+
+/*
+	CIndicatorMA
+	Usage: CIndicatorMA MA = new CIndicatorMA(symbol, timeframe, period, method, appliedPrice)
+*/
+class CIndicatorMA : public CIndicatorBase {
+
+private:
+
+protected:
+
+	int				mPeriod;
+	int				mShift;
+	ENUM_MA_METHOD	mMethod;
+	int				mAppliedPrice;
+	
+public:
+
+	CIndicatorMA() : CIndicatorBase() {};
+	CIndicatorMA(string symbol, int timeframe, int period, ENUM_MA_METHOD method, int appliedPrice);
+	~CIndicatorMA();
+
+	void			Init(string symbol, int timeframe, int period, ENUM_MA_METHOD method, int appliedPrice);
+	
+	#ifdef __MQL4__
+		double	GetValue(int bufferNumber, int index);
+	#endif
+	
+};
+
+CIndicatorMA::CIndicatorMA(string symbol, int timeframe, int period, ENUM_MA_METHOD method, int appliedPrice)
+		: CIndicatorBase() {
+
+	Init(symbol, timeframe, period, method, appliedPrice);
+	
+}
+
+CIndicatorMA::~CIndicatorMA() {
+}
+
+void		CIndicatorMA::Init(string symbol,int timeframe,int period,ENUM_MA_METHOD method,int appliedPrice) {
+
+	//	Only needed for mql4 but no harm for mql5
+	mSymbol			=	symbol;
+	mTimeframe		=	timeframe;
+	mPeriod			=	period;
+	mShift			=	0;
+	mMethod			=	method;
+	mAppliedPrice	=	appliedPrice;
+	
+	//	This must be set for mql5 only
+	#ifdef __MQL5__
+		mHandle	=	iMA(symbol, (ENUM_TIMEFRAMES)timeframe, period, 0, method, appliedPrice);
+	#endif
+
+	//	Set initialised
+	//	I'm not currently using this but I should
+	mInitialised		=	true;
+		
+}
+
+//	This is where the code to call the indicator for MQL4 lives
+#ifdef __MQL4__
+	double	CIndicatorMA::GetValue(int bufferNumber, int index) {
+		double	result	=	iMA(mSymbol, mTimeframe, mPeriod, mShift, mMethod, mAppliedPrice, index);
+		return(result);
+	}
+#endif
+CIndicatorMA	MAAnchorFast;
+CIndicatorMA	MAAnchorSlow;
+CIndicatorMA	MAMainFast;
+CIndicatorMA	MAMainMid;
+CIndicatorMA	MAMainSlow;
+
+STargetPrice	gTarget;
+
+int OnInit() {
+
+	if (PeriodSeconds(InpAnchorTimeframe)<=PeriodSeconds(Period())) {
+		PrintFormat("You must select an anchor timeframe higher than the current chart. Current=%s, selected=%s", EnumToString((ENUM_TIMEFRAMES)Period()), EnumToString(InpAnchorTimeframe));
+		return(INIT_PARAMETERS_INCORRECT);
+	}
+
+	//	For inputs that need one time conversion
+	GEntryOffset	=	InpEntryOffsetPoints*SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+	GFixedSl = InpFixedSlPips * SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+	GFixedTp = InpFixedTpPips * SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+	
+	//	Initialise the magic number in the Trade object
+	Trade.SetExpertMagicNumber(InpMagicNumber);
+
+	//	Initialise the indicators
+	MAAnchorFast.Init(Symbol(), InpAnchorTimeframe, InpAnchorFastPeriod, InpAnchorFastMethod, InpAnchorFastAppliedPrice);
+	MAAnchorSlow.Init(Symbol(), InpAnchorTimeframe, InpAnchorSlowPeriod, InpAnchorSlowMethod, InpAnchorSlowAppliedPrice);
+
+	MAMainFast.Init(Symbol(), Period(), InpMainFastPeriod, InpMainFastMethod, InpMainFastAppliedPrice);
+	MAMainMid.Init(Symbol(), Period(), InpMainMidPeriod, InpMainMidMethod, InpMainMidAppliedPrice);
+	MAMainSlow.Init(Symbol(), Period(), InpMainSlowPeriod, InpMainSlowMethod, InpMainSlowAppliedPrice);
+
+	NewBar();					//	Just sets up prev time to avoid trading when first opened
+	
+	gTarget.entryPrice		=	0;		//	No target
+
+   return(INIT_SUCCEEDED);
+}
+
+void OnDeinit(const int reason) {
+
+	//	Nothing to do here now, common toolbox took care of it
+	
+}
+
+void OnTick() {
+
+	//	Some general get out early conditions
+	if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return;	//	exit if expert trading is not allowed
+	if (!MQLInfoInteger(MQL_TRADE_ALLOWED)) return;
+	if (!AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return;
+	if (!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return;
+	if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
+
+	
+	if (!NewBar()) {
+		OpenAtTarget();							//	If the trigger is already set test if target reached
+		return;
+	}
+														//	Only trade once per bar
+	if (PositionInfo.Count(Symbol(), InpMagicNumber)>0)	return;	//	Only trade if there are no current trades open
+	
+	if (!WaitForHTF(Symbol(), InpAnchorTimeframe))	return;			//	Anchor data not available
+	
+	//	First check the anchor direction
+	double	anchorFast	=	MAAnchorFast.GetValue(1);
+	double	anchorSlow	=	MAAnchorSlow.GetValue(1);
+	double	anchorClose	=	iClose(Symbol(), InpAnchorTimeframe, 1);
+	ENUM_ORDER_TYPE	anchorMode;
+	
+	//	Strategy calls for the price being to one side of the fast ma but isn't clear
+	//		if this means whole candle or just close
+	//	I'm only testing recent close.
+	if (anchorFast>anchorSlow) {	//	Possible buying
+		if (anchorClose<anchorFast)	return;	//	Not aligned
+		anchorMode	=	ORDER_TYPE_BUY;
+	} else {								//	possible selling
+		if (anchorClose>anchorFast)	return;	//	Not aligned
+		anchorMode	=	ORDER_TYPE_SELL;
+	}
+	
+	//	Now is there a direction on the main chart and does it match the anchor
+	//	This is where the strategy talks about the ma fanning out
+	//	I've kept it simple to just being aligned
+	double	mainFast		=	MAMainFast.GetValue(1);
+	double	mainMid		=	MAMainMid.GetValue(1);
+	double	mainSlow		=	MAMainSlow.GetValue(1);
+	double	mainClose	=	iClose(Symbol(), Period(), 1);
+	double	mainHi		=	iHigh(Symbol(), Period(), 1);
+	double	mainLo		=	iLow(Symbol(), Period(), 1);
+	
+	//	I'm adding a confirmation that the ma are aligned with the anchor
+	//	along with being aligned
+	//	Check for a pullback to create a trigger
+	//	Check for closing past slow ma for no go
+	if (mainFast>mainSlow) {		//	buying
+
+		if (anchorMode!=ORDER_TYPE_BUY)	return;		//	current tf doesn't agree with higher tf
+
+		if (mainClose<=mainSlow) {							//	close past slow means cancel
+			gTarget.entryPrice	=	0;
+			return;
+		}
+
+		if (mainLo<=mainFast) {								//	Pullback to fast ma, not checking for existing trigger
+		
+			double entryPrice		=	iHigh(Symbol(), Period(), iHighest(Symbol(), Period(), MODE_HIGH, InpEntryLookback, 2));	//	2 from the example
+			entryPrice				+=	GEntryOffset;
+			double exitPrice		=	mainLo - GFixedSl;	//	exit is offset from trigger bar
+			double tpPrice			=	entryPrice +GFixedTp;	//	Only using a single target, strategy has 2 targets
+			
+			gTarget.entryPrice	=	entryPrice;
+			gTarget.sl				=	exitPrice;
+			gTarget.tp				=	tpPrice;
+			gTarget.type			=	anchorMode;
+			
+		}
+		
+	} else
+	if (mainFast<mainSlow) {		//	selling
+	
+		if (anchorMode!=ORDER_TYPE_SELL)	return;		//	another mismatch
+
+		if (mainClose>=mainSlow) {							//	close past slow means cancel
+			gTarget.entryPrice	=	0;
+			return;
+		}
+
+		if (mainHi>=mainFast) {								//	Pullback to fast ma
+		
+			double entryPrice		=	iLow(Symbol(), Period(), iLowest(Symbol(), Period(), MODE_LOW, InpEntryLookback, 2));	//	2 from the example
+			entryPrice				-=	GEntryOffset;
+			double exitPrice		=	mainHi + GFixedSl;	//	exit is offset from trigger bar
+			double tpPrice			=	entryPrice - GFixedTp;	//	Only using a single target, strategy has 2 targets
+			
+			gTarget.entryPrice	=	entryPrice;
+			gTarget.sl				=	exitPrice;
+			gTarget.tp				=	tpPrice;
+			gTarget.type			=	anchorMode;
+			
+		}
+
+	} else {													//	Not aligned so just get out
+		//	This case not mentioned in the strategy
+	}
+
+	//	Just in case a new target is set and already at entry point
+	OpenAtTarget();	
+	
+}
+
+void	OpenAtTarget() {
+
+	if (gTarget.entryPrice==0)	return;	//	no target set
+	
+	if (gTarget.type==ORDER_TYPE_BUY) {
+		if (SymbolAsk()>=gTarget.entryPrice) {
+			OpenTrade();
+			gTarget.entryPrice	=	0;		//	reset
+		}
+	} else {
+		if (SymbolBid()<=gTarget.entryPrice) {
+			OpenTrade();
+			gTarget.entryPrice	=	0;		//	reset
+		}
+	}
+	
+}
+
+void	OpenTrade() {
+
+	//	Opens trade based on gTarget
+	if (gTarget.entryPrice==0)	return;
+	
+	//	It isn't necessary to pull these out, I just think it's easier to read
+	ENUM_ORDER_TYPE	type	=	gTarget.type;
+	double				price	=	NormalizeDouble(gTarget.entryPrice, Digits());
+	double				sl		=	NormalizeDouble(gTarget.sl,			Digits());
+	double				tp		=	NormalizeDouble(gTarget.tp,			Digits());
+	
+	if (!Trade.PositionOpen(Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment)) {
+		PrintFormat("Error %i placing order type %s", GetLastError(), EnumToString(type));
+	}
+
+}	
+
+bool	NewBar() {
+	static datetime	prevTime	=	0;
+	datetime				now		=	iTime(Symbol(), Period(), 0);
+	if (now==prevTime)	return(false);
+	prevTime	=	now;
+	return(true);
+}
+
+bool	WaitForHTF(string symbol, ENUM_TIMEFRAMES timeframe) {
+
+	for (int waitCount=9; waitCount>=0; waitCount--) {
+		datetime	t	=	iTime(symbol, timeframe, 0);
+		int	err	=	GetLastError();
+		if (t>0)	return(true);
+		Sleep(100);
+   }
+   return(false);
+
+}
+
+//	Symbol values - also a candidate for common toolbox
+double	SymbolAsk()	{	return(SymbolInfoDouble(Symbol(), SYMBOL_ASK));	}
+double	SymbolBid()	{	return(SymbolInfoDouble(Symbol(), SYMBOL_BID));	}
