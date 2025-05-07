@@ -70,22 +70,22 @@ input	ENUM_APPLIED_PRICE	InpMainFastAppliedPrice			=	PRICE_CLOSE;	//	Main Fast M
 
 //	Some inputs
 //	Moving average
-input	ENUM_TIMEFRAMES		InpAnchorTimeframe				=	PERIOD_H1;		//	Anchor Timeframe
-input double InpMinProfitPips = 2.0; // Minimalny zysk w pipsach, przy którym zamykamy pozycję
-input double InpMaxSpreadPips = 2.0; // Maksymalny spread w pipsach przy którym można otworzyć pozycję
+input	ENUM_TIMEFRAMES		InpAnchorTimeframe				=	PERIOD_M5;		//	Anchor Timeframe
+input double InpMinProfitPips = 5.0; // Minimalny zysk w pipsach, przy którym zamykamy pozycję
+input double InpMaxSpreadPips = 3.0; // Maksymalny spread w pipsach przy którym można otworzyć pozycję
 
 //	Input point High/Low of previous candles
-input int						InpEntryLookback					=	5;					//	Entry price lookback
+input int						InpEntryLookback					=	15;					//	Entry price lookback
 
 
 
-input double InpStopLossPips = 10.0;     // Stały Stop Loss w pipsach
-input double InpTakeProfitPips = 20.0;   // Stały Take Profit w pipsach
+input double InpStopLossPips = 100.0;     // Stały Stop Loss w pipsach
+input double InpTakeProfitPips = 100.0;   // Stały Take Profit w pipsach
 
 
 
 //	General items
-input	double					InpOrderSize			=	0.01;				//	Order size
+input	double					InpOrderSize			=	0.1;				//	Order size
 input	int						InpMagicNumber			=	212121;			//	Magic number
 input	string					InpTradeComment		=	__FILE__;		//	Trade comment
 
@@ -93,13 +93,13 @@ input bool enableTimePeriod1 = true; // Domyślnie włączone
 input bool enableTimePeriod2 = true; // Domyślnie włączone
 
 // Definicja zmiennych input dla czasów startu i końca
-input int startHour1 = 6;
+input int startHour1 = 2;
 input int startMinute1 = 0;
-input int endHour1 = 13;
-input int endMinute1 = 0;
+input int endHour1 = 14;
+input int endMinute1 = 25;
 
-input int startHour2 = 15;
-input int startMinute2 = 0;
+input int startHour2 = 14;
+input int startMinute2 = 35;
 input int endHour2 = 22;
 input int endMinute2 = 0;
 bool positionOpenedThisTrend = false;
