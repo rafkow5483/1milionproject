@@ -1,12 +1,15 @@
 #property copyright "Copyright 2021, Orchard Forex"
-#property link      "https://www.orchardforex.com"
+#property link      "https://orchardforex.com"
 #property version   "1.00"
 #property strict
 
-	#include <Trade/PositionInfo.mqh>
 
-class CPositionInfoCustom : public CPositionInfo 
-{
+
+
+#include <Trade/PositionInfo.mqh>
+
+
+class CPositionInfoCustom : public CPositionInfo {
 
 public:
 
@@ -26,24 +29,30 @@ int	CPositionInfoCustom::Count(string symbol, long magic) {
 }
 
 
-	#include <Trade/Trade.mqh>
+
+
+#include <Trade/Trade.mqh>
 
 
 class CTradeCustom : public CTrade {
 
 };
+
+
+
+
+
 CTradeCustom			Trade;
 CPositionInfoCustom	PositionInfo;
 
 struct STargetPrice {
 	ENUM_ORDER_TYPE	type;
 	double				entryPrice;
+	double				sl;
+	double				tp;
 };
 
 
-//	Some inputs
-//	Moving average
-input	ENUM_TIMEFRAMES		InpAnchorTimeframe				=	PERIOD_H1;		//	Anchor Timeframe
 
 input	int						InpAnchorFastPeriod				=	8;				//	Anchor Fast MA Period
 input	ENUM_MA_METHOD			InpAnchorFastMethod				=	MODE_EMA;		//	Anchor Fast MA Method
@@ -58,18 +67,20 @@ input	int						InpMainFastPeriod					=	8;				//	Main Fast MA Period
 input	ENUM_MA_METHOD			InpMainFastMethod					=	MODE_EMA;		//	Main Fast MA Method
 input	ENUM_APPLIED_PRICE	InpMainFastAppliedPrice			=	PRICE_CLOSE;	//	Main Fast MA Applied price
 
-input	int						InpMainMidPeriod					=	13;				//	Main Mid MA Period
-input	ENUM_MA_METHOD			InpMainMidMethod					=	MODE_EMA;		//	Main Mid MA Method
-input	ENUM_APPLIED_PRICE	InpMainMidAppliedPrice			=	PRICE_CLOSE;	//	Main Mid MA Applied price
 
-input	int						InpMainSlowPeriod					=	21;				//	Main Slow MA Period
-input	ENUM_MA_METHOD			InpMainSlowMethod					=	MODE_EMA;		//	Main Slow MA Method
-input	ENUM_APPLIED_PRICE	InpMainSlowAppliedPrice			=	PRICE_CLOSE;	//	Main Slow MA Applied price
+//	Some inputs
+//	Moving average
+input	ENUM_TIMEFRAMES		InpAnchorTimeframe				=	PERIOD_H1;		//	Anchor Timeframe
+input double InpMinProfitPips = 2.0; // Minimalny zysk w pipsach, przy którym zamykamy pozycję
+input double InpMaxSpreadPips = 2.0; // Maksymalny spread w pipsach przy którym można otworzyć pozycję
 
 //	Input point High/Low of previous candles
 input int						InpEntryLookback					=	5;					//	Entry price lookback
-input	int						InpEntryOffsetPoints				=	30;				//	Entry price offset
 
+
+
+input double InpStopLossPips = 10.0;     // Stały Stop Loss w pipsach
+input double InpTakeProfitPips = 20.0;   // Stały Take Profit w pipsach
 
 
 
@@ -78,12 +89,48 @@ input	double					InpOrderSize			=	0.01;				//	Order size
 input	int						InpMagicNumber			=	212121;			//	Magic number
 input	string					InpTradeComment		=	__FILE__;		//	Trade comment
 
+input bool enableTimePeriod1 = true; // Domyślnie włączone
+input bool enableTimePeriod2 = true; // Domyślnie włączone
+
+// Definicja zmiennych input dla czasów startu i końca
+input int startHour1 = 6;
+input int startMinute1 = 0;
+input int endHour1 = 13;
+input int endMinute1 = 0;
+
+input int startHour2 = 15;
+input int startMinute2 = 0;
+input int endHour2 = 22;
+input int endMinute2 = 0;
+bool positionOpenedThisTrend = false;
+
+ENUM_ORDER_TYPE lastOpenedTrend = (ENUM_ORDER_TYPE)(-1);
+
+
+// Funkcja sprawdzająca, czy obecny czas mieści się w określonym przedziale
+bool IsTimeToTrade() {
+    MqlDateTime time;
+    TimeToStruct(TimeCurrent(), time);
+
+    // Konwersja do minut od północy
+    int startTime1 = startHour1 * 60 + startMinute1;
+    int endTime1 = endHour1 * 60 + endMinute1;
+    int startTime2 = startHour2 * 60 + startMinute2;
+    int endTime2 = endHour2 * 60 + endMinute2;
+    int currentTime = time.hour * 60 + time.min;
+
+    bool inTimePeriod1 = (currentTime >= startTime1 && currentTime <= endTime1) && enableTimePeriod1;
+    bool inTimePeriod2 = (currentTime >= startTime2 && currentTime <= endTime2) && enableTimePeriod2;
+
+    // Sprawdzenie czy bieżący czas mieści się w aktywnych przedziałach
+    return inTimePeriod1 || inTimePeriod2;
+}
+
 //	For inputs that need one time conversion
 double	GEntryOffset;
 
 // This is where I use the modular indicator classes
 //	Include the indicator classes
-
 class CIndicatorBase {
 
 private:
@@ -131,8 +178,13 @@ CIndicatorBase::CIndicatorBase() {
 
 CIndicatorBase::~CIndicatorBase() {
 
+	
 		IndicatorRelease(mHandle);
+
+	
 }
+
+
 
 
 	//	In mql5 get the array first then pull a single value
@@ -155,6 +207,11 @@ CIndicatorBase::~CIndicatorBase() {
 	}
 
 
+
+/*
+	CIndicatorMA
+	Usage: CIndicatorMA MA = new CIndicatorMA(symbol, timeframe, period, method, appliedPrice)
+*/
 class CIndicatorMA : public CIndicatorBase {
 
 private:
@@ -174,6 +231,7 @@ public:
 
 	void			Init(string symbol, int timeframe, int period, ENUM_MA_METHOD method, int appliedPrice);
 	
+
 	
 };
 
@@ -189,9 +247,18 @@ CIndicatorMA::~CIndicatorMA() {
 
 void		CIndicatorMA::Init(string symbol,int timeframe,int period,ENUM_MA_METHOD method,int appliedPrice) {
 
+	//	Only needed for mql4 but no harm for mql5
+	mSymbol			=	symbol;
+	mTimeframe		=	timeframe;
+	mPeriod			=	period;
+	mShift			=	0;
+	mMethod			=	method;
+	mAppliedPrice	=	appliedPrice;
 	
-	//	This must be set for mql5 onl
+	//	This must be set for mql5 only
+	#ifdef __MQL5__
 		mHandle	=	iMA(symbol, (ENUM_TIMEFRAMES)timeframe, period, 0, method, appliedPrice);
+	#endif
 
 	//	Set initialised
 	//	I'm not currently using this but I should
@@ -199,10 +266,10 @@ void		CIndicatorMA::Init(string symbol,int timeframe,int period,ENUM_MA_METHOD m
 		
 }
 
+
 CIndicatorMA	MAAnchorFast;
 CIndicatorMA	MAAnchorSlow;
 CIndicatorMA	MAMainFast;
-CIndicatorMA	MAMainMid;
 CIndicatorMA	MAMainSlow;
 
 STargetPrice	gTarget;
@@ -214,8 +281,7 @@ int OnInit() {
 		return(INIT_PARAMETERS_INCORRECT);
 	}
 
-	//	For inputs that need one time conversion
-	GEntryOffset	=	InpEntryOffsetPoints*SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+
 	
 	//	Initialise the magic number in the Trade object
 	Trade.SetExpertMagicNumber(InpMagicNumber);
@@ -225,8 +291,6 @@ int OnInit() {
 	MAAnchorSlow.Init(Symbol(), InpAnchorTimeframe, InpAnchorSlowPeriod, InpAnchorSlowMethod, InpAnchorSlowAppliedPrice);
 
 	MAMainFast.Init(Symbol(), Period(), InpMainFastPeriod, InpMainFastMethod, InpMainFastAppliedPrice);
-	MAMainMid.Init(Symbol(), Period(), InpMainMidPeriod, InpMainMidMethod, InpMainMidAppliedPrice);
-	MAMainSlow.Init(Symbol(), Period(), InpMainSlowPeriod, InpMainSlowMethod, InpMainSlowAppliedPrice);
 
 	NewBar();					//	Just sets up prev time to avoid trading when first opened
 	
@@ -241,132 +305,243 @@ void OnDeinit(const int reason) {
 	
 }
 
+
+// ⛔️ Nie umieszczaj definicji funkcji tutaj!
+
+// ✅ Definicja funkcji poza wszystkimi innymi funkcjami:
+void CheckAndCloseProfitableTrades() {
+   for (int i = PositionsTotal() - 1; i >= 0; i--) {
+      if (PositionGetTicket(i) == 0) continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      if (symbol != Symbol()) continue;
+
+      long magic;
+      if (!PositionGetInteger(POSITION_MAGIC, magic)) continue;
+      if (magic != InpMagicNumber) continue;
+
+      ulong ticket = PositionGetInteger(POSITION_TICKET);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double currentPrice = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+         ? SymbolInfoDouble(symbol, SYMBOL_BID)
+         : SymbolInfoDouble(symbol, SYMBOL_ASK);
+      double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      double pips = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+         ? (currentPrice - openPrice) / point
+         : (openPrice - currentPrice) / point;
+
+      if (pips >= InpMinProfitPips) {
+         double volume = PositionGetDouble(POSITION_VOLUME);
+         MqlTradeRequest request;
+         MqlTradeResult result;
+         ZeroMemory(request);
+         ZeroMemory(result);
+
+         request.action = TRADE_ACTION_DEAL;
+         request.symbol = symbol;
+         request.volume = volume;
+         request.position = ticket;
+         request.magic = InpMagicNumber;
+         request.deviation = 5;
+         request.type = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+            ? ORDER_TYPE_SELL
+            : ORDER_TYPE_BUY;
+         request.price = currentPrice;
+         request.type_filling = ORDER_FILLING_IOC;
+         request.comment = "AutoClose +Pips";
+
+         if (!OrderSend(request, result)) {
+            PrintFormat("❌ Nie udało się zamknąć pozycji #%d, błąd: %d", ticket, result.retcode);
+         } else {
+            PrintFormat("✅ Zamknięto pozycję #%d z zyskiem %.1f pipsów", ticket, pips);
+         }
+      }
+   }
+}
+
+ENUM_ORDER_TYPE lastAnchorMode = (ENUM_ORDER_TYPE)(-1); // Dodaj to na górze pliku (poza funkcjami)
+
+void CloseOppositePosition(ENUM_ORDER_TYPE newTrend) {
+   for (int i = PositionsTotal() - 1; i >= 0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      if (ticket == 0) continue;
+
+      if (!PositionSelectByTicket(ticket)) continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      if (symbol != Symbol()) continue;
+
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      if (magic != InpMagicNumber) continue;
+
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+      // Zamknij pozycję przeciwną do aktualnego trendu
+      if ((newTrend == ORDER_TYPE_BUY && posType == POSITION_TYPE_SELL) ||
+          (newTrend == ORDER_TYPE_SELL && posType == POSITION_TYPE_BUY)) {
+
+         double volume = PositionGetDouble(POSITION_VOLUME);
+         double price = (posType == POSITION_TYPE_BUY) ? SymbolBid() : SymbolAsk();
+
+         MqlTradeRequest request;
+         MqlTradeResult result;
+         ZeroMemory(request);
+         ZeroMemory(result);
+
+         request.action = TRADE_ACTION_DEAL;
+         request.position = ticket;
+         request.symbol = symbol;
+         request.volume = volume;
+         request.price = price;
+         request.deviation = 5;
+         request.type = (posType == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+         request.magic = InpMagicNumber;
+         request.comment = "Close on trend change";
+         request.type_filling = ORDER_FILLING_IOC;
+
+         if (OrderSend(request, result)) {
+            PrintFormat("🔁 Zamknięto przeciwną pozycję #%d przy zmianie trendu", ticket);
+         } else {
+            PrintFormat("❌ Błąd przy zamykaniu pozycji #%d: %d", ticket, result.retcode);
+         }
+      }
+   }
+}
+
+
 void OnTick() {
+   if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return;
+   if (!MQLInfoInteger(MQL_TRADE_ALLOWED)) return;
+   if (!AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return;
+   if (!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return;
+   if (!IsTimeToTrade()) return;
 
-	//	Some general get out early conditions
-	if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return;	//	exit if expert trading is not allowed
-	if (!MQLInfoInteger(MQL_TRADE_ALLOWED)) return;
-	if (!AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return;
-	if (!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return;
-	
-	if (!NewBar()) {
-		OpenAtTarget();							//	If the trigger is already set test if target reached
-		return;
-	}
-														//	Only trade once per bar
-	if (PositionInfo.Count(Symbol(), InpMagicNumber)>0)	return;	//	Only trade if there are no current trades open
-	
-	if (!WaitForHTF(Symbol(), InpAnchorTimeframe))	return;			//	Anchor data not available
-	
-	//	First check the anchor direction
-	double	anchorFast	=	MAAnchorFast.GetValue(1);
-	double	anchorSlow	=	MAAnchorSlow.GetValue(1);
-	double	anchorClose	=	iClose(Symbol(), InpAnchorTimeframe, 1);
-	ENUM_ORDER_TYPE	anchorMode;
-	
-	//	Strategy calls for the price being to one side of the fast ma but isn't clear
-	//		if this means whole candle or just close
-	//	I'm only testing recent close.
-	if (anchorFast>anchorSlow) {	//	Possible buying
-		if (anchorClose<anchorFast)	return;	//	Not aligned
-		anchorMode	=	ORDER_TYPE_BUY;
-	} else {								//	possible selling
-		if (anchorClose>anchorFast)	return;	//	Not aligned
-		anchorMode	=	ORDER_TYPE_SELL;
-	}
-	
-	//	Now is there a direction on the main chart and does it match the anchor
-	//	This is where the strategy talks about the ma fanning out
-	//	I've kept it simple to just being aligned
-	double	mainFast		=	MAMainFast.GetValue(1);
-	double	mainMid		=	MAMainMid.GetValue(1);
-	double	mainSlow		=	MAMainSlow.GetValue(1);
-	double	mainClose	=	iClose(Symbol(), Period(), 1);
-	double	mainHi		=	iHigh(Symbol(), Period(), 1);
-	double	mainLo		=	iLow(Symbol(), Period(), 1);
-	
-	//	I'm adding a confirmation that the ma are aligned with the anchor
-	//	along with being aligned
-	//	Check for a pullback to create a trigger
-	//	Check for closing past slow ma for no go
-	if (mainFast>mainMid && mainMid>mainSlow) {		//	buying
+   CheckAndCloseProfitableTrades();
 
-		if (anchorMode!=ORDER_TYPE_BUY)	return;		//	current tf doesn't agree with higher tf
+   if (!NewBar()) {
+      OpenAtTarget();
+      return;
+   }
 
-		if (mainClose<=mainSlow) {							//	close past slow means cancel
-			gTarget.entryPrice	=	0;
-			return;
-		}
+   if (!WaitForHTF(Symbol(), InpAnchorTimeframe)) return;
 
-		if (mainLo<=mainFast) {								//	Pullback to fast ma, not checking for existing trigger
-		
-			double entryPrice		=	iHigh(Symbol(), Period(), iHighest(Symbol(), Period(), MODE_HIGH, InpEntryLookback, 2));	//	2 from the example
-			entryPrice				+=	GEntryOffset;
-			
-			gTarget.entryPrice	=	entryPrice;
-			gTarget.type			=	anchorMode;
-			
-		}
-		
-	} else
-	if (mainFast<mainMid && mainMid<mainSlow) {		//	selling
-	
-		if (anchorMode!=ORDER_TYPE_SELL)	return;		//	another mismatch
+   double anchorFast  = MAAnchorFast.GetValue(1);
+   double anchorSlow  = MAAnchorSlow.GetValue(1);
+   double anchorClose = iClose(Symbol(), InpAnchorTimeframe, 1);
+   ENUM_ORDER_TYPE anchorMode;
 
-		if (mainClose>=mainSlow) {							//	close past slow means cancel
-			gTarget.entryPrice	=	0;
-			return;
-		}
-
-		if (mainHi>=mainFast) {								//	Pullback to fast ma
-		
-			double entryPrice		=	iLow(Symbol(), Period(), iLowest(Symbol(), Period(), MODE_LOW, InpEntryLookback, 2));	//	2 from the example
-			entryPrice				-=	GEntryOffset;
-		
-			
-			gTarget.entryPrice	=	entryPrice;
-			gTarget.type			=	anchorMode;
-			
-		}
-
-	} else {													//	Not aligned so just get out
-		//	This case not mentioned in the strategy
-	}
-
-	//	Just in case a new target is set and already at entry point
-	OpenAtTarget();	
-	
+if (anchorFast > anchorSlow) {
+   if (anchorClose < anchorFast) return;
+   anchorMode = ORDER_TYPE_SELL;  // 🔁 zamiana
+} else {
+   if (anchorClose > anchorFast) return;
+   anchorMode = ORDER_TYPE_BUY;   // 🔁 zamiana
 }
 
-void	OpenAtTarget() {
-
-	if (gTarget.entryPrice==0)	return;	//	no target set
-	
-	if (gTarget.type==ORDER_TYPE_BUY) {
-		if (SymbolAsk()>=gTarget.entryPrice) {
-			OpenTrade();
-			gTarget.entryPrice	=	0;		//	reset
-		}
-	} else {
-		if (SymbolBid()<=gTarget.entryPrice) {
-			OpenTrade();
-			gTarget.entryPrice	=	0;		//	reset
-		}
-	}
-	
+if (lastAnchorMode != -1 && anchorMode != lastAnchorMode) {
+   Print("🔄 Trend się zmienił — reset pozycji i zamknięcie odwrotnej.");
+   CloseOppositePosition(anchorMode); // <-- 🆕 zamykanie pozycji w przeciwnym kierunku
+   gTarget.entryPrice = 0;
+   gTarget.sl = 0;
+   gTarget.tp = 0;
+   positionOpenedThisTrend = false;
 }
+
+
+   // Zapisz aktualny trend
+   lastAnchorMode = anchorMode;
+
+   // 🚫 Jeśli pozycja była już otwarta w tym trendzie — nie wchodź ponownie
+   if (positionOpenedThisTrend && anchorMode == lastOpenedTrend) {
+      Print("📉 Pozycja już była otwarta w tym trendzie — czekam na zmianę trendu.");
+      return;
+   }
+
+   double mainFast  = MAMainFast.GetValue(1);
+   double mainSlow  = MAMainSlow.GetValue(1);
+   double mainClose = iClose(Symbol(), Period(), 1);
+   double mainHi    = iHigh(Symbol(), Period(), 1);
+   double mainLo    = iLow(Symbol(), Period(), 1);
+
+   if (anchorMode == ORDER_TYPE_BUY) {
+      if (mainLo <= mainFast) {
+         double entryPrice = iHigh(Symbol(), Period(), iHighest(Symbol(), Period(), MODE_HIGH, InpEntryLookback, 2));
+         double exitPrice  = entryPrice - (InpStopLossPips * SymbolInfoDouble(Symbol(), SYMBOL_POINT));
+         double tpPrice    = entryPrice + (InpTakeProfitPips * SymbolInfoDouble(Symbol(), SYMBOL_POINT));
+
+gTarget.entryPrice = entryPrice;
+gTarget.sl         = exitPrice;
+gTarget.tp         = tpPrice;
+gTarget.type       = ORDER_TYPE_BUY; // ZAMIANA z SELL → BUY
+
+      }
+   } else if (anchorMode == ORDER_TYPE_SELL) {
+      if (mainHi >= mainFast) {
+         double entryPrice = iLow(Symbol(), Period(), iLowest(Symbol(), Period(), MODE_LOW, InpEntryLookback, 2));
+         double exitPrice  = entryPrice + (InpStopLossPips * SymbolInfoDouble(Symbol(), SYMBOL_POINT));
+         double tpPrice    = entryPrice - (InpTakeProfitPips * SymbolInfoDouble(Symbol(), SYMBOL_POINT));
+gTarget.entryPrice = entryPrice;
+gTarget.sl         = tpPrice;        // 🔁 zamiana miejscami!
+gTarget.tp         = exitPrice;
+gTarget.type       = ORDER_TYPE_SELL;
+
+      }
+   }
+
+   OpenAtTarget();
+}
+
 
 void OpenTrade() {
-    if (gTarget.entryPrice==0) return;
+   // Oblicz spread
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double spread = (SymbolAsk() - SymbolBid()) / point;
 
-    ENUM_ORDER_TYPE type = gTarget.type;
-    double price = NormalizeDouble(gTarget.entryPrice, Digits());
-    
+   if (spread > InpMaxSpreadPips) {
+      PrintFormat("⛔ Spread za duży (%.1f pipsów) — maksymalny dozwolony: %.1f", spread, InpMaxSpreadPips);
+      return;
+   }
 
-    if (!Trade.PositionOpen(Symbol(), type, InpOrderSize, price, 0, 0, InpTradeComment)) {
-        PrintFormat("Error %i placing order type %s", GetLastError(), EnumToString(type));
-    }
+   if (gTarget.entryPrice == 0) return;
+
+   ENUM_ORDER_TYPE type = gTarget.type;
+   double price = NormalizeDouble(gTarget.entryPrice, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
+   double sl    = NormalizeDouble(gTarget.sl, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
+   double tp    = NormalizeDouble(gTarget.tp, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
+
+   if (!Trade.PositionOpen(_Symbol, type, InpOrderSize, price, sl, tp, InpTradeComment)) {
+      PrintFormat("❌ Błąd przy otwieraniu pozycji typu %s: %d", EnumToString(type), GetLastError());
+   } else {
+      PrintFormat("✅ Otworzono pozycję %s: cena=%.5f SL=%.5f TP=%.5f", EnumToString(type), price, sl, tp);
+      lastOpenedTrend = type;              // 🆕 Zapisz trend, w którym otwarto pozycję
+      positionOpenedThisTrend = true;      // 🆕 Zablokuj kolejne otwarcia w tym trendzie
+   }
 }
+
+
+
+
+
+void OpenAtTarget() {
+   if (gTarget.entryPrice == 0) return;
+
+   if (gTarget.type == ORDER_TYPE_BUY) {
+      if ((GEntryOffset >= 0 && SymbolAsk() >= gTarget.entryPrice) ||
+          (GEntryOffset < 0 && SymbolAsk() <= gTarget.entryPrice)) {
+         OpenTrade();
+         gTarget.entryPrice = 0;
+      }
+   } else {
+      if ((GEntryOffset >= 0 && SymbolBid() <= gTarget.entryPrice) ||
+          (GEntryOffset < 0 && SymbolBid() >= gTarget.entryPrice)) {
+         OpenTrade();
+         gTarget.entryPrice = 0;
+      }
+   }
+}
+
+
+	
 
 bool	NewBar() {
 	static datetime	prevTime	=	0;
