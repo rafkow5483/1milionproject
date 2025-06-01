@@ -1,0 +1,77 @@
+version=4
+study("Double Supertrend (z kropkami i etykietami)", overlay=true, format=format.price, precision=2)
+
+// === Supertrend #1 ===
+Periods1 = input(title="ATR Period 1", type=input.integer, defval=10)
+Multiplier1 = input(title="ATR Multiplier 1", type=input.float, step=0.1, defval=3.0)
+changeATR1 = input(title="Change ATR Method 1?", type=input.bool, defval=true)
+src1 = input(hl2, title="Source 1")
+showsignals1 = input(title="Show Buy/Sell Signals 1?", type=input.bool, defval=true)
+highlighting1 = input(title="Highlighter 1 On/Off?", type=input.bool, defval=true)
+
+atrRaw1 = sma(tr, Periods1)
+atr1 = changeATR1 ? atr(Periods1) : atrRaw1
+up1 = src1 - (Multiplier1 * atr1)
+up1 := close[1] > nz(up1[1], up1) ? max(up1, nz(up1[1], up1)) : up1
+dn1 = src1 + (Multiplier1 * atr1)
+dn1 := close[1] < nz(dn1[1], dn1) ? min(dn1, nz(dn1[1], dn1)) : dn1
+
+var trend1 = 1
+trend1 := trend1 == -1 and close > dn1[1] ? 1 : trend1 == 1 and close < up1[1] ? -1 : trend1
+
+buy1 = trend1 == 1 and trend1[1] == -1
+sell1 = trend1 == -1 and trend1[1] == 1
+
+plotUp1 = plot(trend1 == 1 ? up1 : na, title="Up Trend 1", style=plot.style_linebr, linewidth=2, color=color.green)
+plotDn1 = plot(trend1 == -1 ? dn1 : na, title="Down Trend 1", style=plot.style_linebr, linewidth=2, color=color.red)
+
+plotshape(buy1 ? up1 : na, title="Buy Dot 1", location=location.absolute, style=shape.circle, size=size.tiny, color=color.green, transp=0)
+plotshape(buy1 and showsignals1 ? up1 : na, title="Buy Label 1", text="Buy", location=location.absolute, style=shape.labelup, size=size.tiny, color=color.green, textcolor=color.white, transp=0)
+
+plotshape(sell1 ? dn1 : na, title="Sell Dot 1", location=location.absolute, style=shape.circle, size=size.tiny, color=color.red, transp=0)
+plotshape(sell1 and showsignals1 ? dn1 : na, title="Sell Label 1", text="Sell", location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.red, textcolor=color.white, transp=0)
+
+alertcondition(buy1, title="SuperTrend 1 Buy", message="SuperTrend 1 Buy!")
+alertcondition(sell1, title="SuperTrend 1 Sell", message="SuperTrend 1 Sell!")
+
+// === Supertrend #2 ===
+Periods2 = input(title="ATR Period 2", type=input.integer, defval=20)
+Multiplier2 = input(title="ATR Multiplier 2", type=input.float, step=0.1, defval=2.0)
+changeATR2 = input(title="Change ATR Method 2?", type=input.bool, defval=true)
+src2 = input(close, title="Source 2")
+showsignals2 = input(title="Show Buy/Sell Signals 2?", type=input.bool, defval=true)
+highlighting2 = input(title="Highlighter 2 On/Off?", type=input.bool, defval=true)
+
+atrRaw2 = sma(tr, Periods2)
+atr2 = changeATR2 ? atr(Periods2) : atrRaw2
+up2 = src2 - (Multiplier2 * atr2)
+up2 := close[1] > nz(up2[1], up2) ? max(up2, nz(up2[1], up2)) : up2
+dn2 = src2 + (Multiplier2 * atr2)
+dn2 := close[1] < nz(dn2[1], dn2) ? min(dn2, nz(dn2[1], dn2)) : dn2
+
+var trend2 = 1
+trend2 := trend2 == -1 and close > dn2[1] ? 1 : trend2 == 1 and close < up2[1] ? -1 : trend2
+
+buy2 = trend2 == 1 and trend2[1] == -1
+sell2 = trend2 == -1 and trend2[1] == 1
+
+plotUp2 = plot(trend2 == 1 ? up2 : na, title="Up Trend 2", style=plot.style_linebr, linewidth=2, color=color.blue)
+plotDn2 = plot(trend2 == -1 ? dn2 : na, title="Down Trend 2", style=plot.style_linebr, linewidth=2, color=color.orange)
+
+plotshape(buy2 ? up2 : na, title="Buy Dot 2", location=location.absolute, style=shape.circle, size=size.tiny, color=color.blue, transp=0)
+plotshape(buy2 and showsignals2 ? up2 : na, title="Buy Label 2", text="Buy", location=location.absolute, style=shape.labelup, size=size.tiny, color=color.blue, textcolor=color.white, transp=0)
+
+plotshape(sell2 ? dn2 : na, title="Sell Dot 2", location=location.absolute, style=shape.circle, size=size.tiny, color=color.orange, transp=0)
+plotshape(sell2 and showsignals2 ? dn2 : na, title="Sell Label 2", text="Sell", location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.orange, textcolor=color.white, transp=0)
+
+alertcondition(buy2, title="SuperTrend 2 Buy", message="SuperTrend 2 Buy!")
+alertcondition(sell2, title="SuperTrend 2 Sell", message="SuperTrend 2 Sell!")
+
+// === Highlighting ===
+basePlot = plot(ohlc4, title="", style=plot.style_circles, linewidth=0)
+
+fill(basePlot, plotUp1, title="Highlighter 1 Up", color=highlighting1 and trend1 == 1 ? color.new(color.green, 85) : na)
+fill(basePlot, plotDn1, title="Highlighter 1 Down", color=highlighting1 and trend1 == -1 ? color.new(color.red, 85) : na)
+
+fill(basePlot, plotUp2, title="Highlighter 2 Up", color=highlighting2 and trend2 == 1 ? color.new(color.blue, 85) : na)
+fill(basePlot, plotDn2, title="Highlighter 2 Down", color=highlighting2 and trend2 == -1 ? color.new(color.orange, 85) : na)
