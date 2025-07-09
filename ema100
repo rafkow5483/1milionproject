@@ -1,0 +1,95 @@
+#include <Trade\Trade.mqh>
+
+input int maPeriod = 100;
+input double pipDistance = 10.0;
+input double lotSize = 0.1;
+
+CTrade trade;
+
+int maHandle;
+double emaBuffer[];
+
+// Pipsy automatyczne
+double PipValue()
+{
+   if (_Digits == 5 || _Digits == 3)
+      return 0.00010;
+   else if (_Digits == 2 || _Digits == 4)
+      return 0.01;
+   return 0.0001;
+}
+
+int OnInit()
+{
+   maHandle = iMA(_Symbol, PERIOD_CURRENT, maPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   if (maHandle == INVALID_HANDLE)
+   {
+      Print("Nie można uzyskać uchwytu EMA");
+      return INIT_FAILED;
+   }
+
+   Print("Bot EMA (BUY/SELL) zainicjalizowany");
+   return INIT_SUCCEEDED;
+}
+
+void OnTick()
+{
+   // Pobierz wartość EMA z bufora
+   if (CopyBuffer(maHandle, 0, 0, 1, emaBuffer) <= 0)
+   {
+      Print("Nie można pobrać danych EMA. Error: ", GetLastError());
+      return;
+   }
+
+   double ema = emaBuffer[0];
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double pip = PipValue();
+   double diff = price - ema;
+
+   bool positionOpen = PositionSelect(_Symbol);
+
+   if (!positionOpen)
+   {
+      // Warunek BUY
+      if (diff > pip * pipDistance)
+      {
+         if (trade.Buy(lotSize, _Symbol))
+            Print("BUY otwarty. Cena: ", price, " EMA: ", ema);
+         else
+            Print("Błąd otwarcia BUY: ", GetLastError());
+      }
+
+      // Warunek SELL
+      if (diff < -pip * pipDistance)
+      {
+         if (trade.Sell(lotSize, _Symbol))
+            Print("SELL otwarty. Cena: ", price, " EMA: ", ema);
+         else
+            Print("Błąd otwarcia SELL: ", GetLastError());
+      }
+   }
+   else
+   {
+      long positionType;
+      if (PositionGetInteger(POSITION_TYPE, positionType))
+      {
+         // Jeśli BUY i cena spada poniżej EMA o 10 pipsów => zamykamy
+         if (positionType == POSITION_TYPE_BUY && diff < -pip * pipDistance)
+         {
+            if (trade.PositionClose(_Symbol))
+               Print("BUY zamknięty. Cena: ", price, " EMA: ", ema);
+            else
+               Print("Błąd zamknięcia BUY: ", GetLastError());
+         }
+
+         // Jeśli SELL i cena rośnie powyżej EMA o 10 pipsów => zamykamy
+         if (positionType == POSITION_TYPE_SELL && diff > pip * pipDistance)
+         {
+            if (trade.PositionClose(_Symbol))
+               Print("SELL zamknięty. Cena: ", price, " EMA: ", ema);
+            else
+               Print("Błąd zamknięcia SELL: ", GetLastError());
+         }
+      }
+   }
+}
