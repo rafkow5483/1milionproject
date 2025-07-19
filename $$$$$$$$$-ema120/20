@@ -1,0 +1,107 @@
+//+------------------------------------------------------------------+
+//| Expert Advisor: EMA Cross → Retrace → BUY                       |
+//+------------------------------------------------------------------+
+input int FastMAPeriod = 20;
+input int SlowMAPeriod = 120;
+input double LotSize = 0.1;
+input int Slippage = 5;
+input int RetracePips = 10;
+
+int fastHandle, slowHandle;
+double lastCrossPrice = 0;
+bool waitingForRetrace = false;
+
+int OnInit() {
+    fastHandle = iMA(_Symbol, _Period, FastMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    slowHandle = iMA(_Symbol, _Period, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    if (fastHandle == INVALID_HANDLE || slowHandle == INVALID_HANDLE) {
+        Print("❌ Błąd tworzenia uchwytu MA");
+        return INIT_FAILED;
+    }
+    return INIT_SUCCEEDED;
+}
+
+void OnTick() {
+    double fastMA[2], slowMA[2];
+    if (CopyBuffer(fastHandle, 0, 0, 2, fastMA) <= 0 ||
+        CopyBuffer(slowHandle, 0, 0, 2, slowMA) <= 0) {
+        Print("❌ Błąd pobierania danych MA");
+        return;
+    }
+
+    double maFastCurrent = fastMA[0];
+    double maFastPrevious = fastMA[1];
+    double maSlowCurrent = slowMA[0];
+    double maSlowPrevious = slowMA[1];
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double retraceDistance = RetracePips * _Point * 10;
+
+    bool hasPosition = PositionSelect(_Symbol);
+
+    // 1. EMA20 przecina EMA120 z góry w dół — zapamiętaj cenę
+    if (maFastPrevious < maSlowPrevious && maFastCurrent > maSlowCurrent) {
+        lastCrossPrice = currentPrice;
+        waitingForRetrace = true;
+    }
+
+    // 2. Cena wraca 10 pipsów do góry — otwórz BUY
+    if (waitingForRetrace && !hasPosition) {
+        if ((currentPrice - lastCrossPrice) >= retraceDistance) {
+            OpenBuy();
+            waitingForRetrace = false;
+        }
+    }
+
+    // 3. Zamknij BUY, jeśli EMA20 przecina EMA120 z dołu w górę
+    if (hasPosition && maFastPrevious < maSlowPrevious && maFastCurrent > maSlowCurrent) {
+        CloseBuy();
+        waitingForRetrace = false;
+    }
+}
+
+void OpenBuy() {
+    MqlTradeRequest request;
+    MqlTradeResult result;
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = _Symbol;
+    request.volume = LotSize;
+    request.type = ORDER_TYPE_BUY;
+    request.price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    request.deviation = Slippage;
+    request.magic = 123456;
+    request.type_filling = ORDER_FILLING_IOC;
+
+    if (!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE) {
+        Print("❌ Błąd otwierania BUY: ", result.retcode);
+    } else {
+        Print("✅ BUY otwarty: ", request.price);
+    }
+}
+
+void CloseBuy() {
+    if (!PositionSelect(_Symbol)) return;
+
+    MqlTradeRequest request;
+    MqlTradeResult result;
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = _Symbol;
+    request.volume = PositionGetDouble(POSITION_VOLUME);
+    request.type = ORDER_TYPE_SELL;
+    request.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    request.deviation = Slippage;
+    request.position = PositionGetInteger(POSITION_TICKET);
+    request.magic = 123456;
+    request.type_filling = ORDER_FILLING_IOC;
+
+    if (!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE) {
+        Print("❌ Błąd zamykania BUY: ", result.retcode);
+    } else {
+        Print("✅ BUY zamknięty: ", request.price);
+    }
+}
