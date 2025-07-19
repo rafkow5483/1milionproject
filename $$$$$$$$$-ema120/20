@@ -1,16 +1,88 @@
 //+------------------------------------------------------------------+
-//| Expert Advisor: EMA Cross → Retrace → BUY                       |
+//| Expert Advisor: EMA Cross → Retrace → BUY + Czas dzienny        |
 //+------------------------------------------------------------------+
+
+// ==== Parametry logiki MA ====
 input int FastMAPeriod = 20;
 input int SlowMAPeriod = 120;
 input double LotSize = 0.1;
 input int Slippage = 5;
 input int RetracePips = 10;
 
+// ==== Harmonogram tygodniowy ====
+input bool enableMonday = true;
+input int monStartHour = 1;
+input int monStartMinute = 0;
+input int monEndHour = 23;
+input int monEndMinute = 0;
+
+input bool enableTuesday = true;
+input int tueStartHour = 1;
+input int tueStartMinute = 0;
+input int tueEndHour = 23;
+input int tueEndMinute = 0;
+
+input bool enableWednesday = true;
+input int wedStartHour = 1;
+input int wedStartMinute = 0;
+input int wedEndHour = 23;
+input int wedEndMinute = 0;
+
+input bool enableThursday = true;
+input int thuStartHour = 1;
+input int thuStartMinute = 0;
+input int thuEndHour = 23;
+input int thuEndMinute = 0;
+
+input bool enableFriday = true;
+input int friStartHour = 1;
+input int friStartMinute = 0;
+input int friEndHour = 23;
+input int friEndMinute = 0;
+
+// ==== Zmienne wewnętrzne ====
 int fastHandle, slowHandle;
 double lastCrossPrice = 0;
 bool waitingForRetrace = false;
 
+// ==== Funkcja sprawdzająca czas ====
+bool IsTimeToTrade() {
+    MqlDateTime time;
+    TimeToStruct(TimeCurrent(), time);
+    int currentMinutes = time.hour * 60 + time.min;
+
+    switch (time.day_of_week) {
+        case 1: // Poniedziałek
+            if (!enableMonday) return false;
+            return currentMinutes >= (monStartHour * 60 + monStartMinute) &&
+                   currentMinutes <= (monEndHour * 60 + monEndMinute);
+
+        case 2: // Wtorek
+            if (!enableTuesday) return false;
+            return currentMinutes >= (tueStartHour * 60 + tueStartMinute) &&
+                   currentMinutes <= (tueEndHour * 60 + tueEndMinute);
+
+        case 3: // Środa
+            if (!enableWednesday) return false;
+            return currentMinutes >= (wedStartHour * 60 + wedStartMinute) &&
+                   currentMinutes <= (wedEndHour * 60 + wedEndMinute);
+
+        case 4: // Czwartek
+            if (!enableThursday) return false;
+            return currentMinutes >= (thuStartHour * 60 + thuStartMinute) &&
+                   currentMinutes <= (thuEndHour * 60 + thuEndMinute);
+
+        case 5: // Piątek
+            if (!enableFriday) return false;
+            return currentMinutes >= (friStartHour * 60 + friStartMinute) &&
+                   currentMinutes <= (friEndHour * 60 + friEndMinute);
+
+        default:
+            return false; // Weekend
+    }
+}
+
+// ==== OnInit ====
 int OnInit() {
     fastHandle = iMA(_Symbol, _Period, FastMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
     slowHandle = iMA(_Symbol, _Period, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
@@ -21,7 +93,10 @@ int OnInit() {
     return INIT_SUCCEEDED;
 }
 
+// ==== Główna logika ====
 void OnTick() {
+    if (!IsTimeToTrade()) return;
+
     double fastMA[2], slowMA[2];
     if (CopyBuffer(fastHandle, 0, 0, 2, fastMA) <= 0 ||
         CopyBuffer(slowHandle, 0, 0, 2, slowMA) <= 0) {
@@ -38,13 +113,13 @@ void OnTick() {
 
     bool hasPosition = PositionSelect(_Symbol);
 
-    // 1. EMA20 przecina EMA120 z góry w dół — zapamiętaj cenę
+    // EMA20 przecina EMA120 z góry w dół — zapamiętaj cenę
     if (maFastPrevious < maSlowPrevious && maFastCurrent > maSlowCurrent) {
         lastCrossPrice = currentPrice;
         waitingForRetrace = true;
     }
 
-    // 2. Cena wraca 10 pipsów do góry — otwórz BUY
+    // Cena wraca 10 pipsów w górę — otwórz BUY
     if (waitingForRetrace && !hasPosition) {
         if ((currentPrice - lastCrossPrice) >= retraceDistance) {
             OpenBuy();
@@ -52,13 +127,14 @@ void OnTick() {
         }
     }
 
-    // 3. Zamknij BUY, jeśli EMA20 przecina EMA120 z dołu w górę
+    // Zamknij BUY jeśli znowu EMA20 przecina EMA120 w górę
     if (hasPosition && maFastPrevious < maSlowPrevious && maFastCurrent > maSlowCurrent) {
         CloseBuy();
         waitingForRetrace = false;
     }
 }
 
+// ==== Otwieranie BUY ====
 void OpenBuy() {
     MqlTradeRequest request;
     MqlTradeResult result;
@@ -81,6 +157,7 @@ void OpenBuy() {
     }
 }
 
+// ==== Zamykanie BUY ====
 void CloseBuy() {
     if (!PositionSelect(_Symbol)) return;
 
