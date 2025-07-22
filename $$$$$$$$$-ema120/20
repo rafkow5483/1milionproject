@@ -9,6 +9,10 @@ input double LotSize = 0.1;
 input int Slippage = 5;
 input int RetracePips = 10;
 
+// ==== TP/SL ====
+input int TP_Pips = 20;
+input int SL_Pips = 20;
+
 // ==== Harmonogram tygodniowy ====
 input bool enableMonday = true;
 input int monStartHour = 1;
@@ -52,33 +56,33 @@ bool IsTimeToTrade() {
     int currentMinutes = time.hour * 60 + time.min;
 
     switch (time.day_of_week) {
-        case 1: // Poniedziałek
+        case 1:
             if (!enableMonday) return false;
             return currentMinutes >= (monStartHour * 60 + monStartMinute) &&
                    currentMinutes <= (monEndHour * 60 + monEndMinute);
 
-        case 2: // Wtorek
+        case 2:
             if (!enableTuesday) return false;
             return currentMinutes >= (tueStartHour * 60 + tueStartMinute) &&
                    currentMinutes <= (tueEndHour * 60 + tueEndMinute);
 
-        case 3: // Środa
+        case 3:
             if (!enableWednesday) return false;
             return currentMinutes >= (wedStartHour * 60 + wedStartMinute) &&
                    currentMinutes <= (wedEndHour * 60 + wedEndMinute);
 
-        case 4: // Czwartek
+        case 4:
             if (!enableThursday) return false;
             return currentMinutes >= (thuStartHour * 60 + thuStartMinute) &&
                    currentMinutes <= (thuEndHour * 60 + thuEndMinute);
 
-        case 5: // Piątek
+        case 5:
             if (!enableFriday) return false;
             return currentMinutes >= (friStartHour * 60 + friStartMinute) &&
                    currentMinutes <= (friEndHour * 60 + friEndMinute);
 
         default:
-            return false; // Weekend
+            return false;
     }
 }
 
@@ -113,13 +117,11 @@ void OnTick() {
 
     bool hasPosition = PositionSelect(_Symbol);
 
-    // EMA20 przecina EMA120 z góry w dół — zapamiętaj cenę
     if (maFastPrevious < maSlowPrevious && maFastCurrent > maSlowCurrent) {
         lastCrossPrice = currentPrice;
         waitingForRetrace = true;
     }
 
-    // Cena wraca 10 pipsów w górę — otwórz BUY
     if (waitingForRetrace && !hasPosition) {
         if ((currentPrice - lastCrossPrice) >= retraceDistance) {
             OpenBuy();
@@ -127,25 +129,30 @@ void OnTick() {
         }
     }
 
-    // Zamknij BUY jeśli znowu EMA20 przecina EMA120 w górę
     if (hasPosition && maFastPrevious < maSlowPrevious && maFastCurrent > maSlowCurrent) {
         CloseBuy();
         waitingForRetrace = false;
     }
 }
 
-// ==== Otwieranie BUY ====
+// ==== Otwieranie BUY z TP/SL ====
 void OpenBuy() {
     MqlTradeRequest request;
     MqlTradeResult result;
     ZeroMemory(request);
     ZeroMemory(result);
 
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double sl = price - SL_Pips * _Point * 10;
+    double tp = price + TP_Pips * _Point * 10;
+
     request.action = TRADE_ACTION_DEAL;
     request.symbol = _Symbol;
     request.volume = LotSize;
     request.type = ORDER_TYPE_BUY;
-    request.price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    request.price = price;
+    request.sl = NormalizeDouble(sl, _Digits);
+    request.tp = NormalizeDouble(tp, _Digits);
     request.deviation = Slippage;
     request.magic = 123456;
     request.type_filling = ORDER_FILLING_IOC;
@@ -153,7 +160,7 @@ void OpenBuy() {
     if (!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE) {
         Print("❌ Błąd otwierania BUY: ", result.retcode);
     } else {
-        Print("✅ BUY otwarty: ", request.price);
+        Print("✅ BUY otwarty: ", request.price, " SL: ", request.sl, " TP: ", request.tp);
     }
 }
 
