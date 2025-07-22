@@ -87,6 +87,8 @@ int OnInit() {
 // ==== Główna logika ====
 void OnTick() {
 
+if (!IsTimeToTrade()) return;
+
     double fastMA[2], slowMA[2];
     if (CopyBuffer(fastHandle, 0, 0, 2, fastMA) <= 0 ||
         CopyBuffer(slowHandle, 0, 0, 2, slowMA) <= 0) {
