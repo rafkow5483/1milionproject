@@ -12,6 +12,8 @@ input int RetracePips = 4;
 // ==== TP/SL ====
 input int TP_Pips = 20;
 input int SL_Pips = 5;
+input int BreakEvenPips = 50; // BE po osiągnięciu 50 pipsów
+
 
 // ==== Magic Numbers ====
 input ulong BuyMagicNumber = 111111;
@@ -90,6 +92,8 @@ void OnTick() {
         CopyBuffer(slowHandle, 0, 0, 2, slowMA) <= 0) {
         Print("❌ Błąd pobierania danych MA");
         return;
+        
+
     }
 
     double maFastCurrent = fastMA[0];
@@ -149,6 +153,7 @@ if (waitingForSellRetrace && !hasSell) {
         CloseSell();
         waitingForSellRetrace = false;
     }
+    CheckBreakEven();
 }
 
 // ==== Sprawdzenie pozycji po magic number ====
@@ -270,5 +275,52 @@ void CloseSell() {
         Print("❌ Błąd zamykania SELL: ", result.retcode);
     } else {
         Print("✅ SELL zamknięty");
+    }
+}
+
+void CheckBreakEven()
+{
+    for (int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        if (PositionGetTicket(i) > 0)
+        {
+            string symbol = PositionGetString(POSITION_SYMBOL);
+            ulong magic = (ulong)PositionGetInteger(POSITION_MAGIC);
+            double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            double sl = PositionGetDouble(POSITION_SL);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            double currentPrice = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                                  ? SymbolInfoDouble(symbol, SYMBOL_BID)
+                                  : SymbolInfoDouble(symbol, SYMBOL_ASK);
+            
+            double profitPips = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                                ? (currentPrice - entryPrice) / (_Point * 10)
+                                : (entryPrice - currentPrice) / (_Point * 10);
+
+            // Jeśli zysk przekracza próg BreakEven, przesuń SL na cenę wejścia
+            if (profitPips >= BreakEvenPips && MathAbs(sl - entryPrice) > (_Point * 5))
+            {
+                MqlTradeRequest request;
+                MqlTradeResult result;
+                ZeroMemory(request);
+                ZeroMemory(result);
+
+                request.action = TRADE_ACTION_SLTP;
+                request.symbol = symbol;
+                request.position = PositionGetInteger(POSITION_TICKET);
+                request.sl = NormalizeDouble(entryPrice, _Digits); // SL = cena wejścia
+                request.tp = PositionGetDouble(POSITION_TP);
+                request.magic = magic;
+
+                if (!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
+                {
+                    Print("❌ Błąd ustawiania BreakEven: ", result.retcode);
+                }
+                else
+                {
+                    Print("🔐 BreakEven ustawiony (", magic, ") na cenę: ", entryPrice);
+                }
+            }
+        }
     }
 }
