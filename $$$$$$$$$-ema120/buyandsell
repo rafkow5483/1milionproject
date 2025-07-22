@@ -1,0 +1,274 @@
+//+------------------------------------------------------------------+
+//| Expert Advisor: EMA Cross → Retrace → BUY & SELL + Czas         |
+//+------------------------------------------------------------------+
+
+// ==== Parametry logiki MA ====
+input int FastMAPeriod = 10;
+input int SlowMAPeriod = 150;
+input double LotSize = 10;
+input int Slippage = 5;
+input int RetracePips = 4;
+
+// ==== TP/SL ====
+input int TP_Pips = 20;
+input int SL_Pips = 5;
+
+// ==== Magic Numbers ====
+input ulong BuyMagicNumber = 111111;
+input ulong SellMagicNumber = 222222;
+
+// ==== Harmonogram tygodniowy ====
+input bool enableMonday = true;
+input int monStartHour = 16;
+input int monStartMinute = 0;
+input int monEndHour = 23;
+input int monEndMinute = 0;
+
+input bool enableTuesday = true;
+input int tueStartHour = 16;
+input int tueStartMinute = 0;
+input int tueEndHour = 23;
+input int tueEndMinute = 0;
+
+input bool enableWednesday = true;
+input int wedStartHour = 16;
+input int wedStartMinute = 0;
+input int wedEndHour = 23;
+input int wedEndMinute = 0;
+
+input bool enableThursday = true;
+input int thuStartHour = 16;
+input int thuStartMinute = 0;
+input int thuEndHour = 23;
+input int thuEndMinute = 0;
+
+input bool enableFriday = true;
+input int friStartHour = 16;
+input int friStartMinute = 0;
+input int friEndHour = 23;
+input int friEndMinute = 0;
+
+// ==== Zmienne wewnętrzne ====
+int fastHandle, slowHandle;
+double lastBuyCrossPrice = 0;
+double lastSellCrossPrice = 0;
+bool waitingForBuyRetrace = false;
+bool waitingForSellRetrace = false;
+
+// ==== Funkcja sprawdzająca czas ====
+bool IsTimeToTrade() {
+    MqlDateTime time;
+    TimeToStruct(TimeCurrent(), time);
+    int currentMinutes = time.hour * 60 + time.min;
+
+    switch (time.day_of_week) {
+        case 1: return enableMonday && currentMinutes >= (monStartHour * 60 + monStartMinute) && currentMinutes <= (monEndHour * 60 + monEndMinute);
+        case 2: return enableTuesday && currentMinutes >= (tueStartHour * 60 + tueStartMinute) && currentMinutes <= (tueEndHour * 60 + tueEndMinute);
+        case 3: return enableWednesday && currentMinutes >= (wedStartHour * 60 + wedStartMinute) && currentMinutes <= (wedEndHour * 60 + wedEndMinute);
+        case 4: return enableThursday && currentMinutes >= (thuStartHour * 60 + thuStartMinute) && currentMinutes <= (thuEndHour * 60 + thuEndMinute);
+        case 5: return enableFriday && currentMinutes >= (friStartHour * 60 + friStartMinute) && currentMinutes <= (friEndHour * 60 + friEndMinute);
+        default: return false;
+    }
+}
+
+// ==== OnInit ====
+int OnInit() {
+    fastHandle = iMA(_Symbol, _Period, FastMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    slowHandle = iMA(_Symbol, _Period, SlowMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    if (fastHandle == INVALID_HANDLE || slowHandle == INVALID_HANDLE) {
+        Print("❌ Błąd tworzenia uchwytu MA");
+        return INIT_FAILED;
+    }
+    return INIT_SUCCEEDED;
+}
+
+// ==== Główna logika ====
+void OnTick() {
+
+    double fastMA[2], slowMA[2];
+    if (CopyBuffer(fastHandle, 0, 0, 2, fastMA) <= 0 ||
+        CopyBuffer(slowHandle, 0, 0, 2, slowMA) <= 0) {
+        Print("❌ Błąd pobierania danych MA");
+        return;
+    }
+
+    double maFastCurrent = fastMA[0];
+    double maFastPrevious = fastMA[1];
+    double maSlowCurrent = slowMA[0];
+    double maSlowPrevious = slowMA[1];
+
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double retraceDistance = RetracePips * _Point * 10;
+
+    bool hasBuy = HasPositionWithMagic(BuyMagicNumber);
+    bool hasSell = HasPositionWithMagic(SellMagicNumber);
+
+    // BUY logic
+    if (maFastPrevious < maSlowPrevious && maFastCurrent > maSlowCurrent) {
+        lastBuyCrossPrice = ask;
+        waitingForBuyRetrace = true;
+    }
+
+   if (waitingForBuyRetrace && !hasBuy) {
+    if ((ask - lastBuyCrossPrice) >= retraceDistance) {
+        if (IsTimeToTrade()) {
+            OpenBuy();
+            waitingForBuyRetrace = false;
+        } else {
+            Print("⏰ BUY spełnione warunki, ale poza godzinami handlu.");
+        }
+    }
+}
+
+
+    if (hasBuy && maFastPrevious < maSlowPrevious && maFastCurrent > maSlowCurrent) {
+        CloseBuy();
+        waitingForBuyRetrace = false;
+    }
+
+    // SELL logic
+    if (maFastPrevious > maSlowPrevious && maFastCurrent < maSlowCurrent) {
+        lastSellCrossPrice = bid;
+        waitingForSellRetrace = true;
+    }
+
+if (waitingForSellRetrace && !hasSell) {
+    if ((lastSellCrossPrice - bid) >= retraceDistance) {
+        if (IsTimeToTrade()) {
+            OpenSell();
+            waitingForSellRetrace = false;
+        } else {
+            Print("⏰ SELL spełnione warunki, ale poza godzinami handlu.");
+        }
+    }
+}
+
+
+    if (hasSell && maFastPrevious > maSlowPrevious && maFastCurrent < maSlowCurrent) {
+        CloseSell();
+        waitingForSellRetrace = false;
+    }
+}
+
+// ==== Sprawdzenie pozycji po magic number ====
+bool HasPositionWithMagic(ulong magic)
+{
+    for (int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        if (PositionGetTicket(i) > 0)
+        {
+            if ((ulong)PositionGetInteger(POSITION_MAGIC) == magic)
+                return true;
+        }
+    }
+    return false;
+}
+
+// ==== Pozycja BUY ====
+void OpenBuy() {
+    MqlTradeRequest request;
+    MqlTradeResult result;
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double sl = price - SL_Pips * _Point * 10;
+    double tp = price + TP_Pips * _Point * 10;
+
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = _Symbol;
+    request.volume = LotSize;
+    request.type = ORDER_TYPE_BUY;
+    request.price = price;
+    request.sl = NormalizeDouble(sl, _Digits);
+    request.tp = NormalizeDouble(tp, _Digits);
+    request.deviation = Slippage;
+    request.magic = BuyMagicNumber;
+    request.type_filling = ORDER_FILLING_IOC;
+
+    if (!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE) {
+        Print("❌ Błąd otwierania BUY: ", result.retcode);
+    } else {
+        Print("✅ BUY otwarty: ", price);
+    }
+}
+
+void CloseBuy() {
+    if (!PositionSelect(_Symbol) || (ulong)PositionGetInteger(POSITION_MAGIC) != BuyMagicNumber) return;
+
+    MqlTradeRequest request;
+    MqlTradeResult result;
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = _Symbol;
+    request.volume = PositionGetDouble(POSITION_VOLUME);
+    request.type = ORDER_TYPE_SELL;
+    request.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    request.deviation = Slippage;
+    request.position = PositionGetInteger(POSITION_TICKET);
+    request.magic = BuyMagicNumber;
+    request.type_filling = ORDER_FILLING_IOC;
+
+    if (!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE) {
+        Print("❌ Błąd zamykania BUY: ", result.retcode);
+    } else {
+        Print("✅ BUY zamknięty");
+    }
+}
+
+// ==== Pozycja SELL ====
+void OpenSell() {
+    MqlTradeRequest request;
+    MqlTradeResult result;
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double sl = price + SL_Pips * _Point * 10;
+    double tp = price - TP_Pips * _Point * 10;
+
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = _Symbol;
+    request.volume = LotSize;
+    request.type = ORDER_TYPE_SELL;
+    request.price = price;
+    request.sl = NormalizeDouble(sl, _Digits);
+    request.tp = NormalizeDouble(tp, _Digits);
+    request.deviation = Slippage;
+    request.magic = SellMagicNumber;
+    request.type_filling = ORDER_FILLING_IOC;
+
+    if (!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE) {
+        Print("❌ Błąd otwierania SELL: ", result.retcode);
+    } else {
+        Print("✅ SELL otwarty: ", price);
+    }
+}
+
+void CloseSell() {
+    if (!PositionSelect(_Symbol) || (ulong)PositionGetInteger(POSITION_MAGIC) != SellMagicNumber) return;
+
+    MqlTradeRequest request;
+    MqlTradeResult result;
+    ZeroMemory(request);
+    ZeroMemory(result);
+
+    request.action = TRADE_ACTION_DEAL;
+    request.symbol = _Symbol;
+    request.volume = PositionGetDouble(POSITION_VOLUME);
+    request.type = ORDER_TYPE_BUY;
+    request.price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    request.deviation = Slippage;
+    request.position = PositionGetInteger(POSITION_TICKET);
+    request.magic = SellMagicNumber;
+    request.type_filling = ORDER_FILLING_IOC;
+
+    if (!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE) {
+        Print("❌ Błąd zamykania SELL: ", result.retcode);
+    } else {
+        Print("✅ SELL zamknięty");
+    }
+}
