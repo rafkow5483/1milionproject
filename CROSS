@@ -1,0 +1,144 @@
+//+------------------------------------------------------------------+
+//|            LWMA 20/50 Cross EA (MQL5) - Final Version            |
+//+------------------------------------------------------------------+
+#property strict
+
+input int FastMAPeriod = 20;
+input int SlowMAPeriod = 50;
+input double LotSize = 0.1;
+input int Slippage = 5;
+
+int fast_ma_handle;
+int slow_ma_handle;
+
+//+------------------------------------------------------------------+
+//| Inicjalizacja                                                    |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+   fast_ma_handle = iMA(_Symbol, _Period, FastMAPeriod, 0, MODE_LWMA, PRICE_CLOSE);
+   slow_ma_handle = iMA(_Symbol, _Period, SlowMAPeriod, 0, MODE_LWMA, PRICE_CLOSE);
+
+   if(fast_ma_handle == INVALID_HANDLE || slow_ma_handle == INVALID_HANDLE)
+     {
+      Print("❌ Błąd tworzenia uchwytów MA");
+      return INIT_FAILED;
+     }
+
+   return INIT_SUCCEEDED;
+  }
+
+//+------------------------------------------------------------------+
+//| OnTick                                                           |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   double fast_ma[2], slow_ma[2];
+   if(CopyBuffer(fast_ma_handle, 0, 0, 2, fast_ma) != 2 ||
+      CopyBuffer(slow_ma_handle, 0, 0, 2, slow_ma) != 2)
+     return;
+
+   bool has_position = PositionSelect(_Symbol);
+   int current_type = -1;  // -1 = brak pozycji
+   if(has_position)
+      current_type = (int)PositionGetInteger(POSITION_TYPE);
+
+   // 1. Otwarcie BUY jeśli brak pozycji i przecięcie w górę
+   if(!has_position && fast_ma[1] > slow_ma[1] && fast_ma[0] < slow_ma[0])
+     {
+      OpenPosition(POSITION_TYPE_BUY);
+      return;
+     }
+
+   // 2. Otwarcie SELL jeśli brak pozycji i przecięcie w dół
+   if(!has_position && fast_ma[1] < slow_ma[1] && fast_ma[0] > slow_ma[0])
+     {
+      OpenPosition(POSITION_TYPE_SELL);
+      return;
+     }
+
+   // 3. Zamknięcie BUY, jeśli mamy BUY i przecięcie w dół
+   if(has_position && current_type == POSITION_TYPE_BUY &&
+      fast_ma[1] < slow_ma[1] && fast_ma[0] > slow_ma[0])
+     {
+      CloseCurrentPosition();
+      return;
+     }
+
+   // 4. Zamknięcie SELL, jeśli mamy SELL i przecięcie w górę
+   if(has_position && current_type == POSITION_TYPE_SELL &&
+      fast_ma[1] > slow_ma[1] && fast_ma[0] < slow_ma[0])
+     {
+      CloseCurrentPosition();
+      return;
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Otwarcie pozycji                                                 |
+//+------------------------------------------------------------------+
+void OpenPosition(ENUM_POSITION_TYPE type)
+  {
+   MqlTradeRequest request;
+   MqlTradeResult result;
+   ZeroMemory(request);
+   ZeroMemory(result);
+
+   request.symbol = _Symbol;
+   request.volume = LotSize;
+   request.magic = 123456;
+   request.deviation = Slippage;
+   request.type_filling = ORDER_FILLING_IOC;
+   request.action = TRADE_ACTION_DEAL;
+
+   if(type == POSITION_TYPE_BUY)
+     {
+      request.type = ORDER_TYPE_BUY;
+      request.price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+     }
+   else
+     {
+      request.type = ORDER_TYPE_SELL;
+      request.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+     }
+
+   if(!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
+      Print("❌ Błąd otwierania pozycji: ", result.retcode);
+   else
+      Print("✅ Otwarto pozycję: ", EnumToString(type), " @ ", request.price);
+  }
+
+//+------------------------------------------------------------------+
+//| Zamknięcie obecnej pozycji                                       |
+//+------------------------------------------------------------------+
+void CloseCurrentPosition()
+  {
+   if(!PositionSelect(_Symbol)) return;
+
+   ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   ulong ticket = PositionGetInteger(POSITION_TICKET);
+   double volume = PositionGetDouble(POSITION_VOLUME);
+   double price = (type == POSITION_TYPE_BUY) ?
+                  SymbolInfoDouble(_Symbol, SYMBOL_BID) :
+                  SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   MqlTradeRequest request;
+   MqlTradeResult result;
+   ZeroMemory(request);
+   ZeroMemory(result);
+
+   request.action = TRADE_ACTION_DEAL;
+   request.symbol = _Symbol;
+   request.volume = volume;
+   request.position = ticket;
+   request.magic = 123456;
+   request.deviation = Slippage;
+   request.type_filling = ORDER_FILLING_IOC;
+   request.price = price;
+   request.type = (type == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+
+   if(!OrderSend(request, result) || result.retcode != TRADE_RETCODE_DONE)
+      Print("❌ Błąd zamykania pozycji: ", result.retcode);
+   else
+      Print("✅ Zamknięto pozycję: ", EnumToString(type), " @ ", price);
+  }
