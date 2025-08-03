@@ -1,0 +1,52 @@
+//@version=4
+study("✅ EMA Crossover: kolor od sygnału po 15:30", overlay=true)
+
+// === Parametry
+shortEmaLen = input(20, title="EMA 1")
+longEmaLen  = input(26, title="EMA 2")
+showsignals = input(true, title="Pokaż Buy/Sell?")
+showEma     = input(true, title="Pokaż EMA?")
+
+// === EMA
+emaShort = ema(close, shortEmaLen)
+emaLong = ema(close, longEmaLen)
+
+// === Sygnały
+bullishCross = crossover(emaShort, emaLong)
+bearishCross = crossunder(emaShort, emaLong)
+
+// === Trend
+var int trend = na
+trend := bullishCross ? 1 : bearishCross ? -1 : nz(trend)
+
+// === Zakres czasowy: 15:30–22:00 (czas Warszawski)
+tStart = timestamp("Europe/Warsaw", year, month, dayofmonth, 15, 30)
+tEnd   = timestamp("Europe/Warsaw", year, month, dayofmonth, 20, 50)
+inTimeRange = time >= tStart and time <= tEnd
+
+// === Czy jesteśmy po 15:30?
+after1530 = time >= tStart
+
+// === Czy pierwszy sygnał pojawił się PO 15:30?
+var bool activated = false
+activated := activated or ((bullishCross or bearishCross) and after1530)
+
+// === Kolorowanie tylko jeśli aktywowane i w godzinach 15:30–22:00
+colorCandle = activated and inTimeRange ? (trend == 1 ? color.blue : trend == -1 ? color.white : na) : color.gray
+
+// === Świece
+plotcandle(open, high, low, close, color=colorCandle, wickcolor=colorCandle, bordercolor=colorCandle)
+
+// === Etykiety tylko po aktywacji
+plotshape(bullishCross and showsignals and activated and inTimeRange, title="Buy", location=location.belowbar,
+     style=shape.labelup, color=color.green, text="Buy", textcolor=color.white, size=size.small)
+plotshape(bearishCross and showsignals and activated and inTimeRange, title="Sell", location=location.abovebar,
+     style=shape.labeldown, color=color.red, text="Sell", textcolor=color.white, size=size.small)
+
+// === EMA linie
+plot(showEma ? emaShort : na, title="EMA 1", color=color.orange)
+plot(showEma ? emaLong : na, title="EMA 2", color=color.blue)
+
+// === Alerty
+alertcondition(bullishCross and activated and inTimeRange, title="BUY Alert", message="EMA12 crossed above EMA26 - BUY")
+alertcondition(bearishCross and activated and inTimeRange, title="SELL Alert", message="EMA12 crossed below EMA26 - SELL")
