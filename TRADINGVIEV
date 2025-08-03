@@ -6,10 +6,13 @@ shortEmaLen = input(20, title="EMA 1")
 longEmaLen  = input(26, title="EMA 2")
 showsignals = input(true, title="Pokaż Buy/Sell?")
 showEma     = input(true, title="Pokaż EMA?")
+showExtraEma = input(true, title="Pokaż EMA 5 i EMA 10?") // dodatkowy parametr
 
 // === EMA
 emaShort = ema(close, shortEmaLen)
 emaLong = ema(close, longEmaLen)
+ema5 = ema(close, 5)
+ema10 = ema(close, 10)
 
 // === Sygnały
 bullishCross = crossover(emaShort, emaLong)
@@ -46,6 +49,8 @@ plotshape(bearishCross and showsignals and activated and inTimeRange, title="Sel
 // === EMA linie
 plot(showEma ? emaShort : na, title="EMA 1", color=color.orange)
 plot(showEma ? emaLong : na, title="EMA 2", color=color.blue)
+plot(showExtraEma ? ema5 : na, title="EMA 5", color=color.fuchsia)
+plot(showExtraEma ? ema10 : na, title="EMA 10", color=color.aqua)
 
 // === Alerty
 alertcondition(bullishCross and activated and inTimeRange, title="BUY Alert", message="EMA12 crossed above EMA26 - BUY")
