@@ -1,0 +1,194 @@
+//+------------------------------------------------------------------+
+//|                       MA_Pullback_SellStop_OnPullbackLow.mq5     |
+//|  MA(5) przecina MA(20) w dół -> po cofce >= X pips               |
+//|  USTAW SELL STOP na dołku, który poprzedził tę cofkę              |
+//+------------------------------------------------------------------+
+#property strict
+#include <Trade/Trade.mqh>
+CTrade trade;
+
+//--------------------------- Parametry -----------------------------//
+input ENUM_MA_METHOD InpMaMethod        = MODE_EMA; // EMA/SMA itd.
+input int            InpFastPeriod      = 5;        // szybka MA
+input int            InpSlowPeriod      = 20;       // wolna MA
+input int            InpPullbackPips    = 5;        // minimalna cofka w górę (pipsy)
+input double         InpLots            = 0.10;     // wolumen
+input int            InpSL_Pips         = 0;        // SL (pipsy; 0 = brak)
+input int            InpTP_Pips         = 0;        // TP (pipsy; 0 = brak)
+input double         InpBreakLowPips    = 0.0;      // przebicie poniżej low (pipsy) dla SELL STOP
+input int            InpExpireMinutes   = 240;      // wygaśnięcie oczekującego (0 = GTC)
+input long           InpMagic           = 20250810; // magic
+input int            InpSlippagePts     = 10;       // maks. odchylenie (punkty)
+
+//--------------------------- Zmienne -------------------------------//
+int      fastHandle=-1, slowHandle=-1;
+datetime lastCrossTime=0;
+bool     downTrendArmed=false;  // po przecięciu w dół – „uzbrojony”
+double   swingLow=0.0;          // aktualny dołek (poprzedzający cofkę)
+bool     pullbackSeen=false;    // czy cofka >= X pips już wystąpiła
+ulong    pendingTicket=0;
+
+//--------------------------- Pomocnicze ----------------------------//
+double Pip(){ return (_Digits==3 || _Digits==5) ? 10.0*_Point : _Point; }
+double N(double p){ return NormalizeDouble(p,_Digits); }
+
+bool PrepareMAs()
+{
+   if(fastHandle==-1)
+      fastHandle=iMA(_Symbol,PERIOD_CURRENT,InpFastPeriod,0,InpMaMethod,PRICE_CLOSE);
+   if(slowHandle==-1)
+      slowHandle=iMA(_Symbol,PERIOD_CURRENT,InpSlowPeriod,0,InpMaMethod,PRICE_CLOSE);
+   return (fastHandle!=INVALID_HANDLE && slowHandle!=INVALID_HANDLE);
+}
+
+bool ReadMA(int shift,double &f,double &s)
+{
+   if(!PrepareMAs()) return false;
+   double fb[3], sb[3];
+   if(CopyBuffer(fastHandle,0,shift,3,fb)<3) return false;
+   if(CopyBuffer(slowHandle,0,shift,3,sb)<3) return false;
+   f=fb[0]; s=sb[0]; return true;
+}
+
+bool CrossDownConfirmed(datetime &barTime)
+{
+   double f2,s2,f1,s1;
+   if(!ReadMA(2,f2,s2) || !ReadMA(1,f1,s1)) return false;
+   if(f2> s2 && f1< s1)
+   {
+      MqlRates r[]; if(CopyRates(_Symbol,PERIOD_CURRENT,1,1,r)==1){ barTime=r[0].time; return true; }
+   }
+   return false;
+}
+bool CrossUpConfirmed()
+{
+   double f2,s2,f1,s1;
+   if(!ReadMA(2,f2,s2) || !ReadMA(1,f1,s1)) return false;
+   return (f2< s2 && f1> s1);
+}
+
+void ResetState(bool keepLastCross=false)
+{
+   downTrendArmed=false;
+   swingLow=0.0;
+   pullbackSeen=false;
+   if(!keepLastCross) lastCrossTime=0;
+}
+
+void CancelOurPendings()
+{
+   for(int i=OrdersTotal()-1;i>=0;--i)
+   {
+      ulong t=OrderGetTicket(i); if(!t) continue;
+      if(!OrderSelect(t)) continue;
+      if(OrderGetInteger(ORDER_MAGIC)!=InpMagic) continue;
+      if(OrderGetInteger(ORDER_TYPE)==ORDER_TYPE_SELL_STOP)
+         trade.OrderDelete(t);
+   }
+   pendingTicket=0;
+}
+
+bool PlaceSellStopAtSwingLow()
+{
+   double pp=Pip();
+   double price = N(swingLow - InpBreakLowPips*pp); // ewentualne lekkie przebicie dołka
+   double sl=0.0, tp=0.0;
+   if(InpSL_Pips>0) sl=N(price + InpSL_Pips*pp);
+   if(InpTP_Pips>0) tp=N(price - InpTP_Pips*pp);
+
+   datetime exp=(InpExpireMinutes>0)?(TimeCurrent()+InpExpireMinutes*60):0;
+
+   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetDeviationInPoints(InpSlippagePts);
+
+   bool ok=trade.SellStop(InpLots,price,_Symbol,sl,tp,(exp>0?ORDER_TIME_SPECIFIED:ORDER_TIME_GTC),exp);
+   if(ok){
+      pendingTicket=trade.ResultOrder();
+      PrintFormat("SELL STOP ok: price=%.5f sl=%.5f tp=%.5f (swingLow=%.5f)",
+                  price,sl,tp,swingLow);
+   }else{
+      PrintFormat("SELL STOP błąd: ret=%d (%s)", (int)trade.ResultRetcode(),
+                  trade.ResultRetcodeDescription());
+   }
+   return ok;
+}
+
+//------------------------------ OnInit -----------------------------//
+int OnInit(){ ResetState(); return(INIT_SUCCEEDED); }
+
+//------------------------------ OnTick -----------------------------//
+void OnTick()
+{
+   if(!PrepareMAs()) return;
+
+   // 1) Uzbrój po potwierdzonym przecięciu w dół (na świecy [1])
+   datetime ct=0;
+   if(CrossDownConfirmed(ct) && ct!=lastCrossTime)
+   {
+      CancelOurPendings();
+      ResetState(true);
+      lastCrossTime=ct;
+      downTrendArmed=true;
+      // Ustaw początkowy swingLow na bieżący Bid; później będzie zbijany w dół tak długo,
+      // aż pojawi się cofka >= X pipsów
+      swingLow = SymbolInfoDouble(_Symbol,SYMBOL_BID);
+      Print("Przecięcie w dół potwierdzone -> szukam dołka i czekam na cofkę ≥ ",
+            InpPullbackPips," pips.");
+   }
+
+   // 2) Jeśli trend w górę – czyść wszystko
+   if(CrossUpConfirmed())
+   {
+      CancelOurPendings();
+      ResetState();
+      Print("Przecięcie w górę — reset.");
+      return;
+   }
+
+   if(!downTrendArmed) return;
+
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   double pp = Pip();
+
+   // 3) Aktualizuj dołek DOPÓKI nie widzieliśmy cofki (szukamy low poprzedzającego cofkę)
+   if(!pullbackSeen)
+   {
+      if(swingLow==0.0 || bid < swingLow)
+         swingLow = bid;
+
+      // Sprawdź, czy cofka od TEGO dołka wyniosła ≥ X pipsów
+      double pullbackTrigger = swingLow + InpPullbackPips*pp;
+      if(ask >= pullbackTrigger)
+      {
+         pullbackSeen = true; // mamy cofkę
+         PrintFormat("Cofka wykryta: swingLow=%.5f, cofka≥%d pips.", swingLow, InpPullbackPips);
+
+         // 4) Ustaw SELL STOP na dołku (opcjonalnie z przebiciem InpBreakLowPips)
+         if(!PlaceSellStopAtSwingLow())
+         {
+            // jeśli nie udało się złożyć zlecenia – pozwól szukać kolejnego setupu od nowa
+            pullbackSeen=false;
+         }
+      }
+   }
+
+   // 5) Sprzątanie ticketu (jeśli zlecenie zniknęło – np. zrealizowane/wygaśnięte)
+   if(pendingTicket!=0 && !OrderSelect(pendingTicket))
+   {
+      pendingTicket=0;
+      // po realizacji/wygaśnięciu możesz chcieć polować na KOLEJNĄ cofkę
+      // z tym samym przecięciem — wróć do stanu po przecięciu:
+      pullbackSeen=false;
+      // swingLow ustawiamy na obecny Bid, żeby złapać nowy dołek po ewentualnym dalszym spadku
+      swingLow=bid;
+   }
+}
+
+//------------------------------ OnDeinit ---------------------------//
+void OnDeinit(const int reason){}
+
+
+
+
+
