@@ -3,6 +3,7 @@
 //|   BUY = lustrzane odbicie SELL                                   |
 //|   SELL: cross-down, cofka w górę ≥ X pips -> SELL STOP na dołku  |
 //|   BUY : cross-up,   cofka w dół ≥ X pips -> BUY  STOP na szczycie|
+//|   Dodano: limit maks. spreadu + strażnik oczekujących            |
 //+------------------------------------------------------------------+
 #property strict
 #include <Trade/Trade.mqh>
@@ -23,6 +24,10 @@ input long           InpMagic           = 20250810; // magic
 input int            InpSlippagePts     = 10;       // maks. odchylenie (punkty)
 input bool           InpOnePosPerCross  = true;     // jedna pozycja na przecięcie
 
+// --- Nowe: kontrola spreadu ---
+input double         InpMaxSpreadPips   = 2.0;      // maks. spread (pipsy; 0 = brak limitu)
+input bool           InpGuardPendingsBySpread = true; // usuń oczekujące gdy spread > limit
+
 // tryb kierunku
 enum DirectionMode { SELL_ONLY=0, BUY_ONLY=1, BOTH=2 };
 input DirectionMode  InpDirection       = BOTH;     // które kierunki aktywne
@@ -37,20 +42,36 @@ datetime lastCrossUpTime=0;
 // SELL stan
 bool     sellArmed=false;         // po cross-down: szukamy cofki w górę
 double   swingLow=0.0;            // dołek poprzedzający cofkę
-bool     pullbackSeenSell=false;  // cofka >= X pips dla SELL?
+bool     pullbackSeenSell=false;  // cofka ≥ X pips dla SELL?
 ulong    pendingSellTicket=0;     // ticket SELL STOP
 bool     tradedThisCrossDown=false; // JEDNA pozycja dla danego cross-down
 
 // BUY stan
 bool     buyArmed=false;          // po cross-up: szukamy cofki w dół
 double   swingHigh=0.0;           // szczyt poprzedzający cofkę
-bool     pullbackSeenBuy=false;   // cofka >= X pips dla BUY?
+bool     pullbackSeenBuy=false;   // cofka ≥ X pips dla BUY?
 ulong    pendingBuyTicket=0;      // ticket BUY STOP
 bool     tradedThisCrossUp=false; // JEDNA pozycja dla danego cross-up
 
 //=========================== Pomocnicze ============================//
 double Pip(){ return (_Digits==3 || _Digits==5) ? 10.0*_Point : _Point; }
 double N(double p){ return NormalizeDouble(p,_Digits); }
+double SpreadPips()
+{
+   double b=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   double a=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   return (a-b)/Pip();
+}
+
+bool SpreadOK()
+{
+   if(InpMaxSpreadPips<=0.0) return true;
+   double sp = SpreadPips();
+   if(sp <= InpMaxSpreadPips) return true;
+   PrintFormat("Spread %.1f pips > limit %.1f pips — wstrzymuję działanie.",
+               sp, InpMaxSpreadPips);
+   return false;
+}
 
 bool PrepareMAs()
 {
@@ -126,6 +147,9 @@ bool PlaceSellStopAtSwingLow()
 {
    if(InpOnePosPerCross && tradedThisCrossDown) return false;
 
+   // kontrola spreadu przed złożeniem
+   if(!SpreadOK()) return false;
+
    double pp=Pip();
    double price = N(swingLow - InpBreakLowPips*pp);
    double sl=0.0, tp=0.0;
@@ -152,6 +176,9 @@ bool PlaceSellStopAtSwingLow()
 bool PlaceBuyStopAtSwingHigh()
 {
    if(InpOnePosPerCross && tradedThisCrossUp) return false;
+
+   // kontrola spreadu przed złożeniem
+   if(!SpreadOK()) return false;
 
    double pp=Pip();
    double price = N(swingHigh + InpBreakHighPips*pp);
@@ -186,6 +213,33 @@ void OnTick()
    double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
    double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
    double pp=Pip();
+
+   //--- 0) Strażnik: jeśli spread > limit, usuwaj oczekujące (opcja)
+   if(InpMaxSpreadPips>0.0 && InpGuardPendingsBySpread)
+   {
+      double sp=SpreadPips();
+      if(sp > InpMaxSpreadPips)
+      {
+         if(pendingSellTicket!=0)
+         {
+            trade.OrderDelete(pendingSellTicket);
+            pendingSellTicket=0;
+            pullbackSeenSell=false;
+            swingLow=bid;
+            PrintFormat("Spread %.1f > %.1f — usuwam SELL STOP i czekam na poprawę.",
+                        sp, InpMaxSpreadPips);
+         }
+         if(pendingBuyTicket!=0)
+         {
+            trade.OrderDelete(pendingBuyTicket);
+            pendingBuyTicket=0;
+            pullbackSeenBuy=false;
+            swingHigh=ask;
+            PrintFormat("Spread %.1f > %.1f — usuwam BUY STOP i czekam na poprawę.",
+                        sp, InpMaxSpreadPips);
+         }
+      }
+   }
 
    //--- 1) Nowe przecięcia
    datetime ctDown=0, ctUp=0;
@@ -224,14 +278,9 @@ void OnTick()
       }
    }
 
-   // jeśli nic nieuzbrojone i tryb nie pozwala — wyjdź
-   if(InpDirection==SELL_ONLY && !sellArmed) { /* czekamy na cross-down */ }
-   if(InpDirection==BUY_ONLY  && !buyArmed ) { /* czekamy na cross-up   */ }
-
    //--- 2) SELL — pilnowanie cofki w górę i wystawienie SELL STOP
    if(sellArmed && !(InpOnePosPerCross && tradedThisCrossDown))
    {
-      // dołek cofki — aktualizuj dopóki nie było cofki
       if(!pullbackSeenSell)
       {
          if(swingLow==0.0 || bid < swingLow)
@@ -241,7 +290,7 @@ void OnTick()
          if(ask >= triggerUp)
          {
             pullbackSeenSell=true;
-            PrintFormat("SELL: cofka ≥ %d pips (swingLow=%.5f). Ustawiam SELL STOP.", InpPullbackPips, swingLow);
+            PrintFormat("SELL: cofka ≥ %d pips (swingLow=%.5f). Próba wystawienia SELL STOP.", InpPullbackPips, swingLow);
             if(!PlaceSellStopAtSwingLow())
                pullbackSeenSell=false; // spróbuj ponownie
          }
@@ -262,7 +311,6 @@ void OnTick()
    //--- 3) BUY — pilnowanie cofki w dół i wystawienie BUY STOP
    if(buyArmed && !(InpOnePosPerCross && tradedThisCrossUp))
    {
-      // szczyt cofki — aktualizuj dopóki nie było cofki
       if(!pullbackSeenBuy)
       {
          if(swingHigh==0.0 || ask > swingHigh)
@@ -272,7 +320,7 @@ void OnTick()
          if(bid <= triggerDn)
          {
             pullbackSeenBuy=true;
-            PrintFormat("BUY: cofka ≥ %d pips (swingHigh=%.5f). Ustawiam BUY STOP.", InpPullbackPips, swingHigh);
+            PrintFormat("BUY: cofka ≥ %d pips (swingHigh=%.5f). Próba wystawienia BUY STOP.", InpPullbackPips, swingHigh);
             if(!PlaceBuyStopAtSwingHigh())
                pullbackSeenBuy=false; // spróbuj ponownie
          }
@@ -330,6 +378,4 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 
 //=============================== OnDeinit ===========================//
 void OnDeinit(const int reason){ /* nic */ }
-
-
 
