@@ -1,7 +1,8 @@
 //+------------------------------------------------------------------+
-//|            MA_Pullback_SellStop_OnePerCross.mq5                  |
-//|  Jedna pozycja na jedno przecięcie MA(5) < MA(20).               |
-//|  Po cofce >= X pips ustaw SELL STOP na dołku tej cofki.          |
+//|   MA_Pullback_BuySellStop_OnePerCross.mq5                        |
+//|   BUY = lustrzane odbicie SELL                                   |
+//|   SELL: cross-down, cofka w górę ≥ X pips -> SELL STOP na dołku  |
+//|   BUY : cross-up,   cofka w dół ≥ X pips -> BUY  STOP na szczycie|
 //+------------------------------------------------------------------+
 #property strict
 #include <Trade/Trade.mqh>
@@ -11,24 +12,41 @@ CTrade trade;
 input ENUM_MA_METHOD InpMaMethod        = MODE_EMA; // EMA/SMA/SMMA/LWMA
 input int            InpFastPeriod      = 5;        // szybka MA
 input int            InpSlowPeriod      = 20;       // wolna MA
-input int            InpPullbackPips    = 5;        // min cofka w górę (pipsy)
+input int            InpPullbackPips    = 5;        // min cofka (pipsy)
 input double         InpLots            = 0.10;     // wolumen
 input int            InpSL_Pips         = 0;        // SL (pipsy; 0 = brak)
 input int            InpTP_Pips         = 0;        // TP (pipsy; 0 = brak)
-input double         InpBreakLowPips    = 0.0;      // przebicie low dla SELL STOP (pipsy)
-input int            InpExpireMinutes   = 240;      // wygaśnięcie oczekującego (0=GTC)
+input double         InpBreakLowPips    = 0.0;      // przebicie Low dla SELL STOP
+input double         InpBreakHighPips   = 0.0;      // przebicie High dla BUY  STOP
+input int            InpExpireMinutes   = 240;      // wygaśnięcie oczekujących (0=GTC)
 input long           InpMagic           = 20250810; // magic
 input int            InpSlippagePts     = 10;       // maks. odchylenie (punkty)
 input bool           InpOnePosPerCross  = true;     // jedna pozycja na przecięcie
 
+// tryb kierunku
+enum DirectionMode { SELL_ONLY=0, BUY_ONLY=1, BOTH=2 };
+input DirectionMode  InpDirection       = BOTH;     // które kierunki aktywne
+
 //=========================== Zmienne stanu =========================//
 int      fastHandle=-1, slowHandle=-1;
-datetime lastCrossTime=0;     // czas świecy z potwierdzonym cross-down
-bool     armed=false;         // po cross-down: szukamy cofki
-double   swingLow=0.0;        // dołek poprzedzający cofkę
-bool     pullbackSeen=false;  // cofka >= X pips już była?
-ulong    pendingTicket=0;     // ticket SELL STOP
-bool     tradedThisCross=false; // POZYCJA już zrobiona dla TEGO crossa?
+
+// czasy potwierdzonych przecięć
+datetime lastCrossDownTime=0;
+datetime lastCrossUpTime=0;
+
+// SELL stan
+bool     sellArmed=false;         // po cross-down: szukamy cofki w górę
+double   swingLow=0.0;            // dołek poprzedzający cofkę
+bool     pullbackSeenSell=false;  // cofka >= X pips dla SELL?
+ulong    pendingSellTicket=0;     // ticket SELL STOP
+bool     tradedThisCrossDown=false; // JEDNA pozycja dla danego cross-down
+
+// BUY stan
+bool     buyArmed=false;          // po cross-up: szukamy cofki w dół
+double   swingHigh=0.0;           // szczyt poprzedzający cofkę
+bool     pullbackSeenBuy=false;   // cofka >= X pips dla BUY?
+ulong    pendingBuyTicket=0;      // ticket BUY STOP
+bool     tradedThisCrossUp=false; // JEDNA pozycja dla danego cross-up
 
 //=========================== Pomocnicze ============================//
 double Pip(){ return (_Digits==3 || _Digits==5) ? 10.0*_Point : _Point; }
@@ -63,21 +81,28 @@ bool CrossDownConfirmed(datetime &barTime)
    return false;
 }
 
-bool CrossUpConfirmed()
+bool CrossUpConfirmed(datetime &barTime)
 {
    double f2,s2,f1,s1;
    if(!ReadMA(2,f2,s2) || !ReadMA(1,f1,s1)) return false;
-   return (f2< s2 && f1> s1);
+   if(f2< s2 && f1> s1)
+   {
+      MqlRates r[]; if(CopyRates(_Symbol,PERIOD_CURRENT,1,1,r)==1){ barTime=r[0].time; return true; }
+   }
+   return false;
 }
 
-void ResetState(bool keepLastCross=false)
+void ResetAllState(bool keepCrossTimes=false)
 {
-   armed=false;
-   swingLow=0.0;
-   pullbackSeen=false;
-   pendingTicket=0;
-   if(!keepLastCross) lastCrossTime=0;
-   // tradedThisCross zostawiamy tak jak jest — resetujemy dopiero przy nowym crossie
+   // SELL
+   sellArmed=false; swingLow=0.0; pullbackSeenSell=false; pendingSellTicket=0;
+   if(!keepCrossTimes) lastCrossDownTime=0;
+   tradedThisCrossDown=false;
+
+   // BUY
+   buyArmed=false; swingHigh=0.0; pullbackSeenBuy=false; pendingBuyTicket=0;
+   if(!keepCrossTimes) lastCrossUpTime=0;
+   tradedThisCrossUp=false;
 }
 
 void CancelOurPendings()
@@ -87,15 +112,19 @@ void CancelOurPendings()
       ulong t=OrderGetTicket(i); if(!t) continue;
       if(!OrderSelect(t)) continue;
       if(OrderGetInteger(ORDER_MAGIC)!=InpMagic) continue;
-      if(OrderGetInteger(ORDER_TYPE)==ORDER_TYPE_SELL_STOP)
+
+      ENUM_ORDER_TYPE typ=(ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      if(typ==ORDER_TYPE_SELL_STOP || typ==ORDER_TYPE_BUY_STOP)
          trade.OrderDelete(t);
    }
-   pendingTicket=0;
+   pendingSellTicket=0;
+   pendingBuyTicket=0;
 }
 
+//---------------------- Składanie SELL STOP ------------------------//
 bool PlaceSellStopAtSwingLow()
 {
-   if(InpOnePosPerCross && tradedThisCross) return false; // już handlowaliśmy na tym crossie
+   if(InpOnePosPerCross && tradedThisCrossDown) return false;
 
    double pp=Pip();
    double price = N(swingLow - InpBreakLowPips*pp);
@@ -109,7 +138,7 @@ bool PlaceSellStopAtSwingLow()
 
    bool ok=trade.SellStop(InpLots,price,_Symbol,sl,tp,(exp>0?ORDER_TIME_SPECIFIED:ORDER_TIME_GTC),exp);
    if(ok){
-      pendingTicket=trade.ResultOrder();
+      pendingSellTicket=trade.ResultOrder();
       PrintFormat("SELL STOP ok: price=%.5f sl=%.5f tp=%.5f (swingLow=%.5f)",
                   price,sl,tp,swingLow);
    }else{
@@ -119,77 +148,150 @@ bool PlaceSellStopAtSwingLow()
    return ok;
 }
 
+//---------------------- Składanie BUY STOP -------------------------//
+bool PlaceBuyStopAtSwingHigh()
+{
+   if(InpOnePosPerCross && tradedThisCrossUp) return false;
+
+   double pp=Pip();
+   double price = N(swingHigh + InpBreakHighPips*pp);
+   double sl=0.0, tp=0.0;
+   if(InpSL_Pips>0) sl=N(price - InpSL_Pips*pp);
+   if(InpTP_Pips>0) tp=N(price + InpTP_Pips*pp);
+   datetime exp=(InpExpireMinutes>0)?(TimeCurrent()+InpExpireMinutes*60):0;
+
+   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetDeviationInPoints(InpSlippagePts);
+
+   bool ok=trade.BuyStop(InpLots,price,_Symbol,sl,tp,(exp>0?ORDER_TIME_SPECIFIED:ORDER_TIME_GTC),exp);
+   if(ok){
+      pendingBuyTicket=trade.ResultOrder();
+      PrintFormat("BUY  STOP ok: price=%.5f sl=%.5f tp=%.5f (swingHigh=%.5f)",
+                  price,sl,tp,swingHigh);
+   }else{
+      PrintFormat("BUY  STOP błąd: ret=%d (%s)", (int)trade.ResultRetcode(),
+                  trade.ResultRetcodeDescription());
+   }
+   return ok;
+}
+
 //=============================== OnInit ============================//
-int OnInit(){ ResetState(); return(INIT_SUCCEEDED); }
+int OnInit(){ ResetAllState(); return(INIT_SUCCEEDED); }
 
 //=============================== OnTick ============================//
 void OnTick()
 {
    if(!PrepareMAs()) return;
 
-   // 1) Nowy cross-down uzbraja strategię i resetuje licznik "jedna pozycja"
-   datetime ct=0;
-   if(CrossDownConfirmed(ct) && ct!=lastCrossTime)
-   {
-      CancelOurPendings();
-      ResetState(true);
-      lastCrossTime=ct;
-      armed=true;
-      tradedThisCross=false; // od tej chwili możemy zrobić dokładnie jedną pozycję
-      swingLow = SymbolInfoDouble(_Symbol,SYMBOL_BID);
-      Print("Cross DOWN potwierdzony -> szukam dołka i cofki ≥ ", InpPullbackPips, " pips.");
-   }
-
-   // 2) Cross-up: czyścimy i czekamy na kolejny cross-down
-   if(CrossUpConfirmed())
-   {
-      CancelOurPendings();
-      ResetState();
-      Print("Cross UP -> reset.");
-      return;
-   }
-
-   if(!armed) return;
-   if(InpOnePosPerCross && tradedThisCross) return; // już zagraliśmy na tym crossie
-
    double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
    double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
    double pp=Pip();
 
-   // 3) Dołek cofki — aktualizuj dopóki nie widzieliśmy cofki
-   if(!pullbackSeen)
-   {
-      if(swingLow==0.0 || bid < swingLow)
-         swingLow=bid;
+   //--- 1) Nowe przecięcia
+   datetime ctDown=0, ctUp=0;
 
-      double trigger = swingLow + InpPullbackPips*pp;
-      if(ask >= trigger)
+   // Cross DOWN -> przygotuj SELL (jeśli tryb pozwala) i wyczyść BUY
+   if(CrossDownConfirmed(ctDown) && ctDown!=lastCrossDownTime)
+   {
+      CancelOurPendings();
+      ResetAllState(true);
+      lastCrossDownTime=ctDown;
+
+      if(InpDirection!=BUY_ONLY){
+         sellArmed=true;
+         tradedThisCrossDown=false;
+         swingLow = bid;
+         Print("Cross DOWN potwierdzony -> SELL: szukam dołka i cofki ≥ ", InpPullbackPips, " pips.");
+      }else{
+         sellArmed=false;
+      }
+   }
+
+   // Cross UP -> przygotuj BUY (jeśli tryb pozwala) i wyczyść SELL
+   if(CrossUpConfirmed(ctUp) && ctUp!=lastCrossUpTime)
+   {
+      CancelOurPendings();
+      ResetAllState(true);
+      lastCrossUpTime=ctUp;
+
+      if(InpDirection!=SELL_ONLY){
+         buyArmed=true;
+         tradedThisCrossUp=false;
+         swingHigh = ask;
+         Print("Cross UP potwierdzony -> BUY: szukam szczytu i cofki ≥ ", InpPullbackPips, " pips.");
+      }else{
+         buyArmed=false;
+      }
+   }
+
+   // jeśli nic nieuzbrojone i tryb nie pozwala — wyjdź
+   if(InpDirection==SELL_ONLY && !sellArmed) { /* czekamy na cross-down */ }
+   if(InpDirection==BUY_ONLY  && !buyArmed ) { /* czekamy na cross-up   */ }
+
+   //--- 2) SELL — pilnowanie cofki w górę i wystawienie SELL STOP
+   if(sellArmed && !(InpOnePosPerCross && tradedThisCrossDown))
+   {
+      // dołek cofki — aktualizuj dopóki nie było cofki
+      if(!pullbackSeenSell)
       {
-         pullbackSeen=true;
-         PrintFormat("Cofka ≥ %d pips wykryta (swingLow=%.5f). Ustawiam SELL STOP.", InpPullbackPips, swingLow);
-         if(!PlaceSellStopAtSwingLow())
+         if(swingLow==0.0 || bid < swingLow)
+            swingLow=bid;
+
+         double triggerUp = swingLow + InpPullbackPips*pp;
+         if(ask >= triggerUp)
          {
-            pullbackSeen=false; // jeśli nie udało się złożyć zlecenia, próbuj dalej
+            pullbackSeenSell=true;
+            PrintFormat("SELL: cofka ≥ %d pips (swingLow=%.5f). Ustawiam SELL STOP.", InpPullbackPips, swingLow);
+            if(!PlaceSellStopAtSwingLow())
+               pullbackSeenSell=false; // spróbuj ponownie
+         }
+      }
+
+      // jeśli oczekujące zniknęło — sprawdź co dalej
+      if(pendingSellTicket!=0 && !OrderSelect(pendingSellTicket))
+      {
+         pendingSellTicket=0;
+         if(!(InpOnePosPerCross && tradedThisCrossDown))
+         {
+            pullbackSeenSell=false;
+            swingLow=bid;
          }
       }
    }
 
-   // 4) Jeśli oczekujące zniknęło, sprawdź czy była transakcja (obsłuży to też OnTradeTransaction)
-   if(pendingTicket!=0 && !OrderSelect(pendingTicket))
+   //--- 3) BUY — pilnowanie cofki w dół i wystawienie BUY STOP
+   if(buyArmed && !(InpOnePosPerCross && tradedThisCrossUp))
    {
-      // zlecenie już nie istnieje: mogło się wypełnić lub wygasnąć/anulować
-      pendingTicket=0;
-      if(!(InpOnePosPerCross && tradedThisCross))
+      // szczyt cofki — aktualizuj dopóki nie było cofki
+      if(!pullbackSeenBuy)
       {
-         // jeśli nie zagraliśmy jeszcze na tym crossie, poluj dalej na kolejną cofkę
-         pullbackSeen=false;
-         swingLow=bid;
+         if(swingHigh==0.0 || ask > swingHigh)
+            swingHigh=ask;
+
+         double triggerDn = swingHigh - InpPullbackPips*pp;
+         if(bid <= triggerDn)
+         {
+            pullbackSeenBuy=true;
+            PrintFormat("BUY: cofka ≥ %d pips (swingHigh=%.5f). Ustawiam BUY STOP.", InpPullbackPips, swingHigh);
+            if(!PlaceBuyStopAtSwingHigh())
+               pullbackSeenBuy=false; // spróbuj ponownie
+         }
+      }
+
+      // jeśli oczekujące zniknęło — sprawdź co dalej
+      if(pendingBuyTicket!=0 && !OrderSelect(pendingBuyTicket))
+      {
+         pendingBuyTicket=0;
+         if(!(InpOnePosPerCross && tradedThisCrossUp))
+         {
+            pullbackSeenBuy=false;
+            swingHigh=ask;
+         }
       }
    }
 }
 
 //=========================== OnTradeTransaction ====================//
-// Ustaw 'tradedThisCross=true' dokładnie w momencie otwarcia pozycji SELL
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
@@ -206,19 +308,28 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       long   dtype = (long)HistoryDealGetInteger(deal, DEAL_TYPE);
       long   dmag  = (long)HistoryDealGetInteger(deal, DEAL_MAGIC);
 
-      if(sym==_Symbol && dmag==InpMagic && dtype==DEAL_TYPE_SELL)
+      if(sym==_Symbol && dmag==InpMagic)
       {
-         tradedThisCross = true;   // zrobiona JEDNA pozycja dla tego crossa
-         armed = false;            // przestajemy polować aż do następnego cross-down
-         CancelOurPendings();      // na wszelki wypadek usuń oczekujące
-         Print("Pozycja SELL otwarta -> blokuję dalsze wejścia do kolejnego przecięcia.");
+         if(dtype==DEAL_TYPE_SELL)
+         {
+            tradedThisCrossDown = true;
+            sellArmed = false;
+            CancelOurPendings();
+            Print("SELL otwarty -> blokuję dalsze wejścia do kolejnego cross-down.");
+         }
+         else if(dtype==DEAL_TYPE_BUY)
+         {
+            tradedThisCrossUp = true;
+            buyArmed = false;
+            CancelOurPendings();
+            Print("BUY otwarty -> blokuję dalsze wejścia do kolejnego cross-up.");
+         }
       }
    }
 }
 
 //=============================== OnDeinit ===========================//
 void OnDeinit(const int reason){ /* nic */ }
-
 
 
 
