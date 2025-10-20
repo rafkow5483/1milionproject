@@ -1,0 +1,295 @@
+#property strict
+#property version   "1.09"
+#property description "BUY/SELL po konfigurowalnych triggerach; zamyka na MA tylko przy zysku; osobny trailing SL względem MA."
+
+#include <Trade/Trade.mqh>
+
+// ── USTAWIENIA ───────────────────────────────────────────────────────────────
+input int      InpMAPeriod            = 100;     // Okres średniej (MA)
+input double   InpLots                = 0.10;    // Wielkość pozycji (lot)
+input int      InpSL_Pips             = 20;      // Stały SL (pips) gdy tryb Fixed
+enum SLMode { SL_Fixed=0, SL_FromMA=1 };
+input SLMode   InpSLMode              = SL_FromMA; // Tryb SL
+input int      InpSL_FromMA_Pips      = 20;      // Odległość SL od MA (pips)
+input bool     InpMA_SL_Recalc        = false;   // Włącz trailing SL po MA
+input int      InpTrailingFromMA_Pips = 15;      // Odległość trailing SL od MA (pips)
+input int      InpTriggerOpenPips     = 20;      // Odległość od kotwicy do OTWARCIA
+input int      InpTriggerClosePips    = 20;      // Odległość od kotwicy do ZAMKNIĘCIA
+input bool     InpCloseOnMA           = true;    // Zamykanie na przecięciu MA tylko przy zysku
+input long     InpMagic               = 20251010;// Magic Number
+
+// ── ZMIENNE ──────────────────────────────────────────────────────────────────
+CTrade trade;
+int      ma_handle = INVALID_HANDLE;
+double   ma_buff[];
+
+bool   anchorAboveActive = false;
+double anchorAboveClose  = 0.0;
+bool   anchorBelowActive = false;
+double anchorBelowClose  = 0.0;
+
+// ── POMOCNICZE ───────────────────────────────────────────────────────────────
+double PipPoint()
+{
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   return ((digits==3 || digits==5) ? 10.0*_Point : _Point);
+}
+
+double NormalizePrice(double price)
+{
+   return NormalizeDouble(price, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
+}
+
+// BUY helpers
+bool HasOpenBuyPosition()
+{
+   for(int i=PositionsTotal()-1; i>=0; --i)
+      if(PositionSelectByTicket(PositionGetTicket(i)) &&
+         PositionGetInteger(POSITION_MAGIC)==InpMagic &&
+         PositionGetString(POSITION_SYMBOL)==_Symbol &&
+         PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)
+         return true;
+   return false;
+}
+
+ulong GetOpenBuyTicket()
+{
+   for(int i=PositionsTotal()-1; i>=0; --i)
+   {
+      ulong t=PositionGetTicket(i);
+      if(PositionSelectByTicket(t) &&
+         PositionGetInteger(POSITION_MAGIC)==InpMagic &&
+         PositionGetString(POSITION_SYMBOL)==_Symbol &&
+         PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)
+         return t;
+   }
+   return 0;
+}
+
+double CalcBuySL(double entryPrice, double ma_now, double pip)
+{
+   double sl;
+   if(InpSLMode==SL_Fixed) sl = entryPrice - InpSL_Pips*pip;
+   else                    sl = ma_now - MathMax(1, InpSL_FromMA_Pips)*pip;
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double min_dist = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL)
+                     *SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(sl > ask - min_dist) sl = ask - min_dist;
+   return NormalizePrice(sl);
+}
+
+// SELL helpers
+bool HasOpenSellPosition()
+{
+   for(int i=PositionsTotal()-1; i>=0; --i)
+      if(PositionSelectByTicket(PositionGetTicket(i)) &&
+         PositionGetInteger(POSITION_MAGIC)==InpMagic &&
+         PositionGetString(POSITION_SYMBOL)==_Symbol &&
+         PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_SELL)
+         return true;
+   return false;
+}
+
+ulong GetOpenSellTicket()
+{
+   for(int i=PositionsTotal()-1; i>=0; --i)
+   {
+      ulong t=PositionGetTicket(i);
+      if(PositionSelectByTicket(t) &&
+         PositionGetInteger(POSITION_MAGIC)==InpMagic &&
+         PositionGetString(POSITION_SYMBOL)==_Symbol &&
+         PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_SELL)
+         return t;
+   }
+   return 0;
+}
+
+double CalcSellSL(double entryPrice, double ma_now, double pip)
+{
+   double sl;
+   if(InpSLMode==SL_Fixed) sl = entryPrice + InpSL_Pips*pip;
+   else                    sl = ma_now + MathMax(1, InpSL_FromMA_Pips)*pip;
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double min_dist = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL)
+                     *SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(sl < bid + min_dist) sl = bid + min_dist;
+   return NormalizePrice(sl);
+}
+
+// ── INIT/DEINIT ──────────────────────────────────────────────────────────────
+int OnInit()
+{
+   trade.SetExpertMagicNumber(InpMagic);
+   ma_handle = iMA(_Symbol, _Period, InpMAPeriod, 0, MODE_SMA, PRICE_CLOSE);
+   if(ma_handle==INVALID_HANDLE)
+   {
+      Print("Błąd tworzenia iMA. Kod: ", GetLastError());
+      return INIT_FAILED;
+   }
+   ArraySetAsSeries(ma_buff, true);
+   return INIT_SUCCEEDED;
+}
+
+void OnDeinit(const int reason)
+{
+   if(ma_handle!=INVALID_HANDLE) IndicatorRelease(ma_handle);
+}
+
+// ── GŁÓWNA LOGIKA ────────────────────────────────────────────────────────────
+void OnTick()
+{
+   if(Bars(_Symbol,_Period) < InpMAPeriod+5) return;
+   if(CopyBuffer(ma_handle,0,0,3,ma_buff) < 3) return;
+
+   double pip = PipPoint();
+   double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   double ma0 = ma_buff[0];
+   double close = iClose(_Symbol, _Period, 0);
+
+   // ── wykrywanie przecięcia MA w czasie rzeczywistym ──
+   if(close > ma0 && !anchorAboveActive)
+   {
+      anchorAboveActive = true;
+      anchorAboveClose = close;
+      anchorBelowActive = false;
+      anchorBelowClose = 0;
+      Print("Nowa kotwica ABOVE: ", DoubleToString(close, _Digits));
+   }
+   else if(close < ma0 && !anchorBelowActive)
+   {
+      anchorBelowActive = true;
+      anchorBelowClose = close;
+      anchorAboveActive = false;
+      anchorAboveClose = 0;
+      Print("Nowa kotwica BELOW: ", DoubleToString(close, _Digits));
+   }
+
+   // ── BUY ENTRY ──
+   if(anchorAboveActive && !HasOpenBuyPosition())
+   {
+      double triggerUp = anchorAboveClose + InpTriggerOpenPips*pip;
+      if(ask >= triggerUp)
+      {
+         double sl = CalcBuySL(ask, ma0, pip);
+         if(trade.Buy(InpLots, _Symbol, 0.0, sl, 0.0))
+         {
+            Print("BUY otwarty przy ", DoubleToString(ask, _Digits));
+            anchorAboveActive = false;
+         }
+      }
+   }
+
+   // ── BUY EXIT ──
+   if(HasOpenBuyPosition())
+   {
+      ulong t = GetOpenBuyTicket();
+      if(t && PositionSelectByTicket(t))
+      {
+         double profit = PositionGetDouble(POSITION_PROFIT);
+
+         // Zamykanie po triggerze (tylko przy zysku lub 0)
+         if(anchorBelowActive)
+         {
+            double triggerDown = anchorBelowClose - InpTriggerClosePips*pip;
+            if(bid <= triggerDown && profit >= 0)
+            {
+               trade.PositionClose(t);
+               if(trade.ResultRetcode()==TRADE_RETCODE_DONE)
+                  anchorBelowActive = false;
+            }
+         }
+
+         // Zamykanie na MA (tylko przy zysku)
+         if(InpCloseOnMA && bid <= ma0 && profit >= 0)
+         {
+            trade.PositionClose(t);
+            if(trade.ResultRetcode()==TRADE_RETCODE_DONE)
+               Print("BUY zamknięty na MA przy zysku ", profit);
+         }
+      }
+   }
+
+   // ── SELL ENTRY ──
+   if(anchorBelowActive && !HasOpenSellPosition())
+   {
+      double triggerDown = anchorBelowClose - InpTriggerOpenPips*pip;
+      if(bid <= triggerDown)
+      {
+         double sl = CalcSellSL(bid, ma0, pip);
+         if(trade.Sell(InpLots, _Symbol, 0.0, sl, 0.0))
+         {
+            Print("SELL otwarty przy ", DoubleToString(bid, _Digits));
+            anchorBelowActive = false;
+         }
+      }
+   }
+
+   // ── SELL EXIT ──
+   if(HasOpenSellPosition())
+   {
+      ulong t = GetOpenSellTicket();
+      if(t && PositionSelectByTicket(t))
+      {
+         double profit = PositionGetDouble(POSITION_PROFIT);
+
+         // Zamykanie po triggerze (tylko przy zysku)
+         if(anchorAboveActive)
+         {
+            double triggerUp = anchorAboveClose + InpTriggerClosePips*pip;
+            if(ask >= triggerUp && profit >= 0)
+            {
+               trade.PositionClose(t);
+               if(trade.ResultRetcode()==TRADE_RETCODE_DONE)
+                  anchorAboveActive = false;
+            }
+         }
+
+         // Zamykanie na MA (tylko przy zysku)
+         if(InpCloseOnMA && ask >= ma0 && profit >= 0)
+         {
+            trade.PositionClose(t);
+            if(trade.ResultRetcode()==TRADE_RETCODE_DONE)
+               Print("SELL zamknięty na MA przy zysku ", profit);
+         }
+      }
+   }
+
+   // ── TRAILING SL po MA ──
+   if(InpMA_SL_Recalc)
+   {
+      // BUY trailing
+      if(HasOpenBuyPosition())
+      {
+         ulong t=GetOpenBuyTicket();
+         if(t && PositionSelectByTicket(t))
+         {
+            double cur_sl=PositionGetDouble(POSITION_SL);
+            double desired=ma0 - InpTrailingFromMA_Pips * pip;
+            if(desired>cur_sl)
+            {
+               trade.PositionModify(t, desired, PositionGetDouble(POSITION_TP));
+               Print("BUY trailing SL podniesiony do ", DoubleToString(desired, _Digits));
+            }
+         }
+      }
+
+      // SELL trailing
+      if(HasOpenSellPosition())
+      {
+         ulong t=GetOpenSellTicket();
+         if(t && PositionSelectByTicket(t))
+         {
+            double cur_sl=PositionGetDouble(POSITION_SL);
+            double desired=ma0 + InpTrailingFromMA_Pips * pip;
+            if(desired<cur_sl || cur_sl<=0.0)
+            {
+               trade.PositionModify(t, desired, PositionGetDouble(POSITION_TP));
+               Print("SELL trailing SL obniżony do ", DoubleToString(desired, _Digits));
+            }
+         }
+      }
+   }
+}
