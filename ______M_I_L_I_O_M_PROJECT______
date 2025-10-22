@@ -1,17 +1,21 @@
+//+------------------------------------------------------------------+
+//|               MA100 + konfigurowalna MA50 BreakEven EA           |
+//+------------------------------------------------------------------+
 #property strict
-#property version   "1.09"
-#property description "BUY/SELL po konfigurowalnych triggerach; zamyka na MA tylko przy zysku; osobny trailing SL względem MA."
+#property version   "1.12"
+#property description "Break-even po przecięciu MA_BreakEven (BUY: z góry w dół, SELL: z dołu w górę) + trailing po MA głównej"
 
 #include <Trade/Trade.mqh>
 
 // ── USTAWIENIA ───────────────────────────────────────────────────────────────
-input int      InpMAPeriod            = 100;     // Okres średniej (MA)
-input double   InpLots                = 0.10;    // Wielkość pozycji (lot)
+input int      InpMAPeriod            = 100;     // Okres głównej średniej (MA)
+input int      InpMAPeriodBE          = 50;      // Okres średniej do break-even
+input double   InpLots                = 0.10;    // Wielkość pozycji
 input int      InpSL_Pips             = 20;      // Stały SL (pips) gdy tryb Fixed
 enum SLMode { SL_Fixed=0, SL_FromMA=1 };
 input SLMode   InpSLMode              = SL_FromMA; // Tryb SL
 input int      InpSL_FromMA_Pips      = 20;      // Odległość SL od MA (pips)
-input bool     InpMA_SL_Recalc        = false;   // Włącz trailing SL po MA
+input bool     InpMA_SL_Recalc        = true;    // Włącz trailing SL po MA
 input int      InpTrailingFromMA_Pips = 15;      // Odległość trailing SL od MA (pips)
 input int      InpTriggerOpenPips     = 20;      // Odległość od kotwicy do OTWARCIA
 input int      InpTriggerClosePips    = 20;      // Odległość od kotwicy do ZAMKNIĘCIA
@@ -21,7 +25,9 @@ input long     InpMagic               = 20251010;// Magic Number
 // ── ZMIENNE ──────────────────────────────────────────────────────────────────
 CTrade trade;
 int      ma_handle = INVALID_HANDLE;
+int      ma_handleBE = INVALID_HANDLE;
 double   ma_buff[];
+double   ma_buffBE[];
 
 bool   anchorAboveActive = false;
 double anchorAboveClose  = 0.0;
@@ -122,19 +128,23 @@ double CalcSellSL(double entryPrice, double ma_now, double pip)
 int OnInit()
 {
    trade.SetExpertMagicNumber(InpMagic);
-   ma_handle = iMA(_Symbol, _Period, InpMAPeriod, 0, MODE_SMA, PRICE_CLOSE);
-   if(ma_handle==INVALID_HANDLE)
+   ma_handle   = iMA(_Symbol, _Period, InpMAPeriod, 0, MODE_SMA, PRICE_CLOSE);
+   ma_handleBE = iMA(_Symbol, _Period, InpMAPeriodBE, 0, MODE_SMA, PRICE_CLOSE);
+
+   if(ma_handle==INVALID_HANDLE || ma_handleBE==INVALID_HANDLE)
    {
       Print("Błąd tworzenia iMA. Kod: ", GetLastError());
       return INIT_FAILED;
    }
    ArraySetAsSeries(ma_buff, true);
+   ArraySetAsSeries(ma_buffBE, true);
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason)
 {
    if(ma_handle!=INVALID_HANDLE) IndicatorRelease(ma_handle);
+   if(ma_handleBE!=INVALID_HANDLE) IndicatorRelease(ma_handleBE);
 }
 
 // ── GŁÓWNA LOGIKA ────────────────────────────────────────────────────────────
@@ -142,29 +152,28 @@ void OnTick()
 {
    if(Bars(_Symbol,_Period) < InpMAPeriod+5) return;
    if(CopyBuffer(ma_handle,0,0,3,ma_buff) < 3) return;
+   if(CopyBuffer(ma_handleBE,0,0,3,ma_buffBE) < 3) return;
 
    double pip = PipPoint();
    double ask = SymbolInfoDouble(_Symbol,SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol,SYMBOL_BID);
    double ma0 = ma_buff[0];
+   double maBE = ma_buffBE[0];
    double close = iClose(_Symbol, _Period, 0);
+   double prevClose = iClose(_Symbol, _Period, 1);
 
-   // ── wykrywanie przecięcia MA w czasie rzeczywistym ──
+   // ── wykrywanie przecięcia MA głównej ──
    if(close > ma0 && !anchorAboveActive)
    {
       anchorAboveActive = true;
       anchorAboveClose = close;
       anchorBelowActive = false;
-      anchorBelowClose = 0;
-      Print("Nowa kotwica ABOVE: ", DoubleToString(close, _Digits));
    }
    else if(close < ma0 && !anchorBelowActive)
    {
       anchorBelowActive = true;
       anchorBelowClose = close;
       anchorAboveActive = false;
-      anchorAboveClose = 0;
-      Print("Nowa kotwica BELOW: ", DoubleToString(close, _Digits));
    }
 
    // ── BUY ENTRY ──
@@ -175,39 +184,24 @@ void OnTick()
       {
          double sl = CalcBuySL(ask, ma0, pip);
          if(trade.Buy(InpLots, _Symbol, 0.0, sl, 0.0))
-         {
-            Print("BUY otwarty przy ", DoubleToString(ask, _Digits));
             anchorAboveActive = false;
-         }
       }
    }
 
-   // ── BUY EXIT ──
+   // ── BUY EXIT + BREAK-EVEN ──
    if(HasOpenBuyPosition())
    {
       ulong t = GetOpenBuyTicket();
       if(t && PositionSelectByTicket(t))
       {
-         double profit = PositionGetDouble(POSITION_PROFIT);
+         double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+         double cur_sl = PositionGetDouble(POSITION_SL);
 
-         // Zamykanie po triggerze (tylko przy zysku lub 0)
-         if(anchorBelowActive)
+         // Przecięcie MA_BreakEven z góry na dół i zejście 20 pips poniżej
+         if(prevClose > maBE && close < maBE - 20*pip && cur_sl < entry)
          {
-            double triggerDown = anchorBelowClose - InpTriggerClosePips*pip;
-            if(bid <= triggerDown && profit >= 0)
-            {
-               trade.PositionClose(t);
-               if(trade.ResultRetcode()==TRADE_RETCODE_DONE)
-                  anchorBelowActive = false;
-            }
-         }
-
-         // Zamykanie na MA (tylko przy zysku)
-         if(InpCloseOnMA && bid <= ma0 && profit >= 0)
-         {
-            trade.PositionClose(t);
-            if(trade.ResultRetcode()==TRADE_RETCODE_DONE)
-               Print("BUY zamknięty na MA przy zysku ", profit);
+            trade.PositionModify(t, entry, PositionGetDouble(POSITION_TP));
+            Print("BUY SL ustawiony na 0 po przecięciu MA_BE z góry w dół o 20 pipsów");
          }
       }
    }
@@ -220,47 +214,31 @@ void OnTick()
       {
          double sl = CalcSellSL(bid, ma0, pip);
          if(trade.Sell(InpLots, _Symbol, 0.0, sl, 0.0))
-         {
-            Print("SELL otwarty przy ", DoubleToString(bid, _Digits));
             anchorBelowActive = false;
-         }
       }
    }
 
-   // ── SELL EXIT ──
+   // ── SELL EXIT + BREAK-EVEN ──
    if(HasOpenSellPosition())
    {
       ulong t = GetOpenSellTicket();
       if(t && PositionSelectByTicket(t))
       {
-         double profit = PositionGetDouble(POSITION_PROFIT);
+         double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+         double cur_sl = PositionGetDouble(POSITION_SL);
 
-         // Zamykanie po triggerze (tylko przy zysku)
-         if(anchorAboveActive)
+         // Przecięcie MA_BreakEven z dołu do góry i wybicie 20 pips powyżej
+         if(prevClose < maBE && close > maBE + 20*pip && (cur_sl > entry || cur_sl==0))
          {
-            double triggerUp = anchorAboveClose + InpTriggerClosePips*pip;
-            if(ask >= triggerUp && profit >= 0)
-            {
-               trade.PositionClose(t);
-               if(trade.ResultRetcode()==TRADE_RETCODE_DONE)
-                  anchorAboveActive = false;
-            }
-         }
-
-         // Zamykanie na MA (tylko przy zysku)
-         if(InpCloseOnMA && ask >= ma0 && profit >= 0)
-         {
-            trade.PositionClose(t);
-            if(trade.ResultRetcode()==TRADE_RETCODE_DONE)
-               Print("SELL zamknięty na MA przy zysku ", profit);
+            trade.PositionModify(t, entry, PositionGetDouble(POSITION_TP));
+            Print("SELL SL ustawiony na 0 po przecięciu MA_BE z dołu w górę o 20 pipsów");
          }
       }
    }
 
-   // ── TRAILING SL po MA ──
+   // ── TRAILING SL po MA głównej ──
    if(InpMA_SL_Recalc)
    {
-      // BUY trailing
       if(HasOpenBuyPosition())
       {
          ulong t=GetOpenBuyTicket();
@@ -269,14 +247,10 @@ void OnTick()
             double cur_sl=PositionGetDouble(POSITION_SL);
             double desired=ma0 - InpTrailingFromMA_Pips * pip;
             if(desired>cur_sl)
-            {
                trade.PositionModify(t, desired, PositionGetDouble(POSITION_TP));
-               Print("BUY trailing SL podniesiony do ", DoubleToString(desired, _Digits));
-            }
          }
       }
 
-      // SELL trailing
       if(HasOpenSellPosition())
       {
          ulong t=GetOpenSellTicket();
@@ -285,11 +259,9 @@ void OnTick()
             double cur_sl=PositionGetDouble(POSITION_SL);
             double desired=ma0 + InpTrailingFromMA_Pips * pip;
             if(desired<cur_sl || cur_sl<=0.0)
-            {
                trade.PositionModify(t, desired, PositionGetDouble(POSITION_TP));
-               Print("SELL trailing SL obniżony do ", DoubleToString(desired, _Digits));
-            }
          }
       }
    }
 }
+
