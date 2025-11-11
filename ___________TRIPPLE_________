@@ -1,0 +1,340 @@
+/*
+   BuySellEma_3MA.mq5
+   Modified by Vatiaz
+   Based on Orchard Forex
+*/
+
+#property copyright "Modified by Vatiaz based on Orchard Forex"
+#property link "https://www.orchardforex.com"
+#property version "2.00"
+
+//
+//	Inputs
+//
+
+//	Fast MA
+input int                InpFastMABars         = 5;          // Fast MA Bars
+input ENUM_MA_METHOD     InpFastMAMethod       = MODE_SMA;    // Fast MA Method
+input ENUM_APPLIED_PRICE InpFastMAAppliedPrice = PRICE_CLOSE; // Fast MA Applied Price
+
+//	Mid MA
+input int                InpMidMABars          = 70;          // Mid MA Bars
+input ENUM_MA_METHOD     InpMidMAMethod        = MODE_EMA;    // Mid MA Method
+input ENUM_APPLIED_PRICE InpMidMAAppliedPrice  = PRICE_CLOSE; // Mid MA Applied Price
+
+//	Slow MA
+input int                InpSlowMABars         = 200;         // Slow MA Bars
+input ENUM_MA_METHOD     InpSlowMAMethod       = MODE_EMA;    // Slow MA Method
+input ENUM_APPLIED_PRICE InpSlowMAAppliedPrice = PRICE_CLOSE; // Slow MA Applied Price
+input int                InpSlowMAShift        = 0;           // Slow MA shift
+
+//	Trade params
+input double             InpOrderSize          = 0.01;  // Order size in lots
+input double             InpTakeProfitPips     = 50.0; // Take profit in pips
+input double             InpStopLossPips       = 15.0; // Stop loss in pips
+input double             InpTrailingStopPips   = 15.0;  // Trailing stop pips
+
+//	Magic and comment
+input int                InpMagic              = 333333;
+input string             InpTradeComment       = "Triple MA Cross";
+int LastCrossDirection = 0; // 0 = brak, 1 = BUY, -1 = SELL
+
+input bool enableTimePeriod1 = true; // Domyślnie włączone
+input bool enableTimePeriod2 = false; // Domyślnie włączone
+
+// Definicja zmiennych input dla czasów startu i końca
+input int startHour1 = 16;
+input int startMinute1 = 30;
+input int endHour1 = 21;
+input int endMinute1 = 0;
+
+input int startHour2 = 15;
+input int startMinute2 = 0;
+input int endHour2 = 22;
+input int endMinute2 = 0;
+
+
+// Funkcja sprawdzająca, czy obecny czas mieści się w określonym przedziale
+bool IsTimeToTrade() {
+    MqlDateTime time;
+    TimeToStruct(TimeCurrent(), time);
+
+    // Konwersja do minut od północy
+    int startTime1 = startHour1 * 60 + startMinute1;
+    int endTime1 = endHour1 * 60 + endMinute1;
+    int startTime2 = startHour2 * 60 + startMinute2;
+    int endTime2 = endHour2 * 60 + endMinute2;
+    int currentTime = time.hour * 60 + time.min;
+
+    bool inTimePeriod1 = (currentTime >= startTime1 && currentTime <= endTime1) && enableTimePeriod1;
+    bool inTimePeriod2 = (currentTime >= startTime2 && currentTime <= endTime2) && enableTimePeriod2;
+
+    // Sprawdzenie czy bieżący czas mieści się w aktywnych przedziałach
+    return inTimePeriod1 || inTimePeriod2;
+}
+
+//
+//	Global vars
+//
+double TakeProfit;
+double StopLoss;
+double TrailingStop;
+
+#include <Trade/Trade.mqh>
+CTrade        Trade;
+CPositionInfo Position;
+
+int FastHandle;
+double FastBuffer[];
+int MidHandle;
+double MidBuffer[];
+int SlowHandle;
+double SlowBuffer[];
+
+//
+//	Pips, points conversion
+//
+double PipSize() { return ( PipSize( Symbol() ) ); }
+double PipSize( string symbol ) {
+   double point  = SymbolInfoDouble( symbol, SYMBOL_POINT );
+   int    digits = ( int )SymbolInfoInteger( symbol, SYMBOL_DIGITS );
+   return ( ( ( digits % 2 ) == 1 ) ? point * 10 : point );
+}
+
+double PipsToDouble( double pips ) { return ( pips * PipSize( Symbol() ) ); }
+double PipsToDouble( double pips, string symbol ) { return ( pips * PipSize( symbol ) ); }
+
+//
+//	Check market open
+//
+bool   IsMarketOpen() { return IsMarketOpen( Symbol(), TimeCurrent() ); }
+bool   IsMarketOpen( datetime time ) { return IsMarketOpen( Symbol(), time ); }
+bool   IsMarketOpen( string symbol, datetime time ) {
+
+   static string   lastSymbol   = "";
+   static bool     isOpen       = false;
+   static datetime sessionStart = 0;
+   static datetime sessionEnd   = 0;
+
+   if ( lastSymbol == symbol && sessionEnd > sessionStart ) {
+      if ( ( isOpen && time >= sessionStart && time <= sessionEnd ) || ( !isOpen && time > sessionStart && time < sessionEnd ) ) return isOpen;
+   }
+
+   lastSymbol = symbol;
+
+   MqlDateTime mtime;
+   TimeToStruct( time, mtime );
+   datetime seconds  = mtime.hour * 3600 + mtime.min * 60 + mtime.sec;
+
+   mtime.hour        = 0;
+   mtime.min         = 0;
+   mtime.sec         = 0;
+   datetime dayStart = StructToTime( mtime );
+   datetime dayEnd   = dayStart + 86400;
+
+   datetime fromTime;
+   datetime toTime;
+
+   sessionStart = dayStart;
+   sessionEnd   = dayEnd;
+
+   for ( int session = 0;; session++ ) {
+      if ( !SymbolInfoSessionTrade( symbol, ( ENUM_DAY_OF_WEEK )mtime.day_of_week, session, fromTime, toTime ) ) {
+         sessionEnd = dayEnd;
+         isOpen     = false;
+         return isOpen;
+      }
+      if ( seconds < fromTime ) { 
+         sessionEnd = dayStart + fromTime;
+         isOpen     = false;
+         return isOpen;
+      }
+      if ( seconds > toTime ) { 
+         sessionStart = dayStart + toTime;
+         continue;
+      }
+      sessionStart = dayStart + fromTime;
+      sessionEnd   = dayStart + toTime;
+      isOpen       = true;
+      return isOpen;
+   }
+   return false;
+}
+
+//
+//	New bar detection
+//
+bool IsNewBar( bool first_call = false ) {
+   static bool result = false;
+   if ( !first_call ) return ( result );
+   static datetime previous_time = 0;
+   datetime current_time  = iTime( Symbol(), Period(), 0 );
+   result = false;
+   if ( previous_time != current_time ) {
+      previous_time = current_time;
+      result        = true;
+   }
+   return ( result );
+}
+
+//
+//	Init
+//
+int OnInit() {
+
+   TakeProfit   = PipsToDouble( InpTakeProfitPips );
+   StopLoss     = PipsToDouble( InpStopLossPips );
+   TrailingStop = PipsToDouble( InpTrailingStopPips );
+
+   Trade.SetExpertMagicNumber( InpMagic );
+
+   FastHandle = iMA( Symbol(), Period(), InpFastMABars, 0, InpFastMAMethod, InpFastMAAppliedPrice );
+   MidHandle  = iMA( Symbol(), Period(), InpMidMABars, 0, InpMidMAMethod, InpMidMAAppliedPrice );
+   SlowHandle = iMA( Symbol(), Period(), InpSlowMABars, 0, InpSlowMAMethod, InpSlowMAAppliedPrice );
+
+   ArraySetAsSeries( FastBuffer, true );
+   ArraySetAsSeries( MidBuffer, true );
+   ArraySetAsSeries( SlowBuffer, true );
+
+   if ( FastHandle == INVALID_HANDLE || MidHandle == INVALID_HANDLE || SlowHandle == INVALID_HANDLE ) {
+      Print( "Error creating handles to moving averages" );
+      return INIT_FAILED;
+   }
+
+   IsNewBar( true );
+
+   return ( INIT_SUCCEEDED );
+}
+
+//
+//	Deinit
+//
+void OnDeinit( const int reason ) {
+   IndicatorRelease( FastHandle );
+   IndicatorRelease( MidHandle );
+   IndicatorRelease( SlowHandle );
+}
+
+//
+//	Main tick
+//
+void OnTick() {
+
+   if ( !IsTradeAllowed() ) return;
+   if ( !IsMarketOpen() ) return;
+
+   // Apply trailing stop every tick
+   if ( TrailingStop > 0 ) ApplyTrailingStop();
+
+   if ( !IsNewBar( true ) ) return;
+   if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
+
+   if ( CopyBuffer( FastHandle, 0, 0, 3, FastBuffer ) < 3 ) return;
+   if ( CopyBuffer( MidHandle, 0, 0, 3, MidBuffer ) < 3 ) return;
+   if ( CopyBuffer( SlowHandle, 0, InpSlowMAShift, 3, SlowBuffer ) < 3 ) return;
+
+   // triple MA logic
+   bool prevUp   = ( FastBuffer[2] > MidBuffer[2] && MidBuffer[2] > SlowBuffer[2] );
+   bool prevDown = ( FastBuffer[2] < MidBuffer[2] && MidBuffer[2] < SlowBuffer[2] );
+   bool nowUp    = ( FastBuffer[1] > MidBuffer[1] && MidBuffer[1] > SlowBuffer[1] );
+   bool nowDown  = ( FastBuffer[1] < MidBuffer[1] && MidBuffer[1] < SlowBuffer[1] );
+
+// -----------------------------------------
+// BLOKADA: tylko jedna pozycja na przecięcie
+// -----------------------------------------
+
+
+if ( nowUp && !prevUp && LastCrossDirection != 1 ) {
+   PrintFormat( "📈 BUY signal — Fast > Mid > Slow (%s)", Symbol() );
+
+   // Zamknij ewentualnego SELL-a, jeśli jest otwarty
+   if ( PositionSelect(Symbol()) && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL )
+      Trade.PositionClose(Symbol());
+
+   OpenTrade(ORDER_TYPE_BUY);
+   LastCrossDirection = 1; // zapamiętaj kierunek przecięcia
+}
+
+if ( nowDown && !prevDown && LastCrossDirection != -1 ) {
+   PrintFormat( "📉 SELL signal — Fast < Mid < Slow (%s)", Symbol() );
+
+   // Zamknij ewentualnego BUY-a, jeśli jest otwarty
+   if ( PositionSelect(Symbol()) && PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY )
+      Trade.PositionClose(Symbol());
+
+   OpenTrade(ORDER_TYPE_SELL);
+   LastCrossDirection = -1; // zapamiętaj kierunek przecięcia
+}
+
+}
+
+//
+//	Open trade
+//
+void OpenTrade( ENUM_ORDER_TYPE type ) {
+
+   double price;
+   double sl;
+   double tp;
+
+   if ( type == ORDER_TYPE_BUY ) {
+      price = SymbolInfoDouble( Symbol(), SYMBOL_ASK );
+      sl    = price - StopLoss;
+      tp    = price + TakeProfit;
+   }
+   else {
+      price = SymbolInfoDouble( Symbol(), SYMBOL_BID );
+      sl    = price + StopLoss;
+      tp    = price - TakeProfit;
+   }
+
+   price = NormalizeDouble( price, Digits() );
+   sl    = NormalizeDouble( sl, Digits() );
+   tp    = NormalizeDouble( tp, Digits() );
+
+   if ( StopLoss == 0 ) sl = 0;
+   if ( TakeProfit == 0 ) tp = 0;
+
+   if ( !Trade.PositionOpen( Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment ) ) {
+      Print( "Open failed for ", Symbol(), ", err=", _LastError );
+   }
+}
+
+//
+//	Check trade permissions
+//
+bool IsTradeAllowed() {
+   return ( ( bool )MQLInfoInteger( MQL_TRADE_ALLOWED )
+            && ( bool )TerminalInfoInteger( TERMINAL_TRADE_ALLOWED )
+            && ( bool )AccountInfoInteger( ACCOUNT_TRADE_ALLOWED )
+            && ( bool )AccountInfoInteger( ACCOUNT_TRADE_EXPERT ) );
+}
+
+//
+//	Trailing Stop
+//
+void ApplyTrailingStop() {
+
+   double ask = SymbolInfoDouble( Symbol(), SYMBOL_ASK );
+   double bid = SymbolInfoDouble( Symbol(), SYMBOL_BID );
+   double buyTrailingStopPrice  = ask - TrailingStop;
+   double sellTrailingStopPrice = bid + TrailingStop;
+
+   for ( int i = PositionsTotal() - 1; i >= 0; i-- ) {
+      ulong ticket = PositionGetTicket( i );
+      if ( !PositionSelectByTicket( ticket ) ) continue;
+      if ( Position.Symbol() != Symbol() || Position.Magic() != InpMagic ) continue;
+
+      if ( Position.PositionType() == POSITION_TYPE_BUY && buyTrailingStopPrice > Position.PriceOpen() &&
+           ( Position.StopLoss() == 0 || buyTrailingStopPrice > Position.StopLoss() ) ) {
+         if ( !Trade.PositionModify( ticket, buyTrailingStopPrice, Position.TakeProfit() ) )
+            PrintFormat( "Failed to update TS on BUY ticket %I64u, err=%i", ticket, _LastError );
+      }
+
+      if ( Position.PositionType() == POSITION_TYPE_SELL && sellTrailingStopPrice < Position.PriceOpen() &&
+           ( Position.StopLoss() == 0 || sellTrailingStopPrice < Position.StopLoss() ) ) {
+         if ( !Trade.PositionModify( ticket, sellTrailingStopPrice, Position.TakeProfit() ) )
+            PrintFormat( "Failed to update TS on SELL ticket %I64u, err=%i", ticket, _LastError );
+      }
+   }
+}
