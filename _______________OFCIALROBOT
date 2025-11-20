@@ -31,9 +31,9 @@ input int                InpSlowMAShift        = 0;           // Slow MA shift
 //
 //	The basic expert uses fixed take profit, stop loss and order size
 //
-input double             InpOrderSize          = 1.0;  // Order size in lots
-input double             InpTakeProfitPips     = 20.0; // Take profit in pips
-input double             InpStopLossPips       = 17.0; // Stop loss in pips
+input double             InpOrderSize          = 5.0;  // Order size in lots
+input double             InpTakeProfitPips     = 50.0; // Take profit in pips
+input double             InpStopLossPips       = 13.0; // Stop loss in pips
 input double             InpTrailingStopPips   = 10.0;  // Trailing stop pips
 
 //
@@ -41,6 +41,7 @@ input double             InpTrailingStopPips   = 10.0;  // Trailing stop pips
 //
 input int                InpMagic              = 222222;                     // Magic number
 input string             InpTradeComment       = "Example MA Cross with TS"; // Trade comment
+input double InpMAPiercePips = 3.0; // Zamknij pozycję, gdy cena przebije MA50 o X pipsów
 
 input bool enableTimePeriod1 = true; // Domyślnie włączone
 input bool enableTimePeriod2 = false; // Domyślnie włączone
@@ -48,7 +49,7 @@ input bool enableTimePeriod2 = false; // Domyślnie włączone
 // Definicja zmiennych input dla czasów startu i końca
 input int startHour1 = 16;
 input int startMinute1 = 30;
-input int endHour1 = 21;
+input int endHour1 = 23;
 input int endMinute1 = 0;
 
 input int startHour2 = 15;
@@ -234,7 +235,8 @@ void OnTick() {
    // I want to apply the trailing stop to every tick
    // so it goes here before the new bar test
    if ( TrailingStop > 0 ) ApplyTrailingStop();
-
+   // ❗ NOWA OPCJA ZAMYKANIA PO PRZEBICIU MA50
+CloseOnMAPierce();
    //	Next exit if this is not a new bar
    //	https://youtu.be/XHJPpvI2h50
    if ( !IsNewBar( true ) ) return;
@@ -327,6 +329,49 @@ void CloseOppositePositions(ENUM_ORDER_TYPE newType)
         if (newType == ORDER_TYPE_BUY && Position.PositionType() == POSITION_TYPE_SELL)
         {
             Trade.PositionClose(ticket);
+        }
+    }
+}
+void CloseOnMAPierce()
+{
+    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+
+    // Pobranie MA50 z bufora
+    if (CopyBuffer(SlowHandle, 0, InpSlowMAShift, 1, SlowBuffer) < 1)
+        return;
+
+    double ma50 = SlowBuffer[0];
+    double pierceDistance = PipsToDouble(InpMAPiercePips);
+
+    for (int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if (!PositionSelectByTicket(ticket)) continue;
+        if (Position.Symbol() != Symbol() || Position.Magic() != InpMagic) continue;
+
+        // ---------------------
+        // BUY → cena musi spaść 10 pipsów poniżej MA50
+        // ---------------------
+        if (Position.PositionType() == POSITION_TYPE_BUY)
+        {
+            if (bid < ma50 - pierceDistance)
+            {
+                Print("Zamykam BUY, bo cena przebiła MA50 w dół o ", InpMAPiercePips, " pipsów.");
+                Trade.PositionClose(ticket);
+            }
+        }
+
+        // ---------------------
+        // SELL → cena musi przebić MA50 o 10 pipsów w górę
+        // ---------------------
+        if (Position.PositionType() == POSITION_TYPE_SELL)
+        {
+            if (ask > ma50 + pierceDistance)
+            {
+                Print("Zamykam SELL, bo cena przebiła MA50 w górę o ", InpMAPiercePips, " pipsów.");
+                Trade.PositionClose(ticket);
+            }
         }
     }
 }
