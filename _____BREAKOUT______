@@ -10,22 +10,24 @@
 CTrade trade;
 
 //=========================== Parametry =============================//
-input ENUM_MA_METHOD InpMaMethod        = MODE_EMA; // EMA/SMA/SMMA/LWMA
-input int            InpFastPeriod      = 5;        // szybka MA
-input int            InpSlowPeriod      = 20;       // wolna MA
-input int            InpPullbackPips    = 5;        // min cofka (pipsy)
+input ENUM_MA_METHOD InpMaMethod        = MODE_SMA; // EMA/SMA/SMMA/LWMA
+input int            InpFastPeriod      = 10;        // szybka MA
+input int            InpSlowPeriod      = 100;       // wolna MA
+input int            InpPullbackPips    = 300;        // min cofka (pipsy)
 input double         InpLots            = 0.10;     // wolumen
-input int            InpSL_Pips         = 0;        // SL (pipsy; 0 = brak)
-input int            InpTP_Pips         = 0;        // TP (pipsy; 0 = brak)
-input double         InpBreakLowPips    = 0.0;      // przebicie Low dla SELL STOP
-input double         InpBreakHighPips   = 0.0;      // przebicie High dla BUY  STOP
-input int            InpExpireMinutes   = 240;      // wygaśnięcie oczekujących (0=GTC)
+input int            InpSL_Pips         = 400;        // SL (pipsy; 0 = brak)
+input int            InpTP_Pips         = 200;        // TP (pipsy; 0 = brak)
+input double         InpBreakLowPips    = -200;      // przebicie Low dla SELL STOP
+input double         InpBreakHighPips   = -200;      // przebicie High dla BUY  STOP
+input int            InpExpireMinutes   = 25;      // wygaśnięcie oczekujących (0=GTC)
 input long           InpMagic           = 20250810; // magic
 input int            InpSlippagePts     = 10;       // maks. odchylenie (punkty)
-input bool           InpOnePosPerCross  = true;     // jedna pozycja na przecięcie
+input bool           InpOnePosPerCross  = false;     // jedna pozycja na przecięcie
+input int            InpSwingLookback   = 15;       // ile ostatnich świec do wyznaczenia high/low
+input bool InpUsePullbackFilter = true; // używać filtra cofki (true/false)
 
 // --- Nowe: kontrola spreadu ---
-input double         InpMaxSpreadPips   = 2.0;      // maks. spread (pipsy; 0 = brak limitu)
+input double         InpMaxSpreadPips   = 12.0;      // maks. spread (pipsy; 0 = brak limitu)
 input bool           InpGuardPendingsBySpread = true; // usuń oczekujące gdy spread > limit
 
 // tryb kierunku
@@ -201,142 +203,207 @@ bool PlaceBuyStopAtSwingHigh()
    }
    return ok;
 }
+//---------------------- Najniższy Low z ostatnich N świec ---------//
+double LowestLow(int barsBack)
+{
+   if(barsBack <= 0) return 0.0;
+
+   MqlRates r[];
+   int copied = CopyRates(_Symbol, PERIOD_CURRENT, 1, barsBack, r); // od świecy 1 (zamknięta)
+   if(copied <= 0) return 0.0;
+
+   double low = r[0].low;
+   for(int i = 1; i < copied; i++)
+   {
+      if(r[i].low < low)
+         low = r[i].low;
+   }
+   return low;
+}
+
+//---------------------- Najwyższy High z ostatnich N świec --------//
+double HighestHigh(int barsBack)
+{
+   if(barsBack <= 0) return 0.0;
+
+   MqlRates r[];
+   int copied = CopyRates(_Symbol, PERIOD_CURRENT, 1, barsBack, r);
+   if(copied <= 0) return 0.0;
+
+   double high = r[0].high;
+   for(int i = 1; i < copied; i++)
+   {
+      if(r[i].high > high)
+         high = r[i].high;
+   }
+   return high;
+}
 
 //=============================== OnInit ============================//
 int OnInit(){ ResetAllState(); return(INIT_SUCCEEDED); }
 
-//=============================== OnTick ============================//
 void OnTick()
 {
-   if(!PrepareMAs()) return;
+    if(!PrepareMAs())
+        return;
 
-   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-   double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-   double pp=Pip();
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double pp  = Pip();
 
-   //--- 0) Strażnik: jeśli spread > limit, usuwaj oczekujące (opcja)
-   if(InpMaxSpreadPips>0.0 && InpGuardPendingsBySpread)
-   {
-      double sp=SpreadPips();
-      if(sp > InpMaxSpreadPips)
-      {
-         if(pendingSellTicket!=0)
-         {
-            trade.OrderDelete(pendingSellTicket);
-            pendingSellTicket=0;
-            pullbackSeenSell=false;
-            swingLow=bid;
-            PrintFormat("Spread %.1f > %.1f — usuwam SELL STOP i czekam na poprawę.",
-                        sp, InpMaxSpreadPips);
-         }
-         if(pendingBuyTicket!=0)
-         {
-            trade.OrderDelete(pendingBuyTicket);
-            pendingBuyTicket=0;
-            pullbackSeenBuy=false;
-            swingHigh=ask;
-            PrintFormat("Spread %.1f > %.1f — usuwam BUY STOP i czekam na poprawę.",
-                        sp, InpMaxSpreadPips);
-         }
-      }
-   }
+    //=====================================================
+    // 0) Kontrola spreadu
+    //=====================================================
+    if(InpMaxSpreadPips > 0.0 && InpGuardPendingsBySpread)
+    {
+        double sp = SpreadPips();
+        if(sp > InpMaxSpreadPips)
+        {
+            if(pendingSellTicket != 0)
+            {
+                trade.OrderDelete(pendingSellTicket);
+                pendingSellTicket = 0;
+            }
+            if(pendingBuyTicket != 0)
+            {
+                trade.OrderDelete(pendingBuyTicket);
+                pendingBuyTicket = 0;
+            }
+        }
+    }
 
-   //--- 1) Nowe przecięcia
-   datetime ctDown=0, ctUp=0;
+    //=====================================================
+    // 1) Nowe przecięcia MA
+    //=====================================================
+    datetime ctDown = 0, ctUp = 0;
 
-   // Cross DOWN -> przygotuj SELL (jeśli tryb pozwala) i wyczyść BUY
-   if(CrossDownConfirmed(ctDown) && ctDown!=lastCrossDownTime)
-   {
-      CancelOurPendings();
-      ResetAllState(true);
-      lastCrossDownTime=ctDown;
+    // CROSS DOWN
+    if(CrossDownConfirmed(ctDown) && ctDown != lastCrossDownTime)
+    {
+        CancelOurPendings();
+        ResetAllState(true);
 
-      if(InpDirection!=BUY_ONLY){
-         sellArmed=true;
-         tradedThisCrossDown=false;
-         swingLow = bid;
-         Print("Cross DOWN potwierdzony -> SELL: szukam dołka i cofki ≥ ", InpPullbackPips, " pips.");
-      }else{
-         sellArmed=false;
-      }
-   }
+        lastCrossDownTime = ctDown;
+        if(InpDirection != BUY_ONLY)
+            sellArmed = true;
+    }
 
-   // Cross UP -> przygotuj BUY (jeśli tryb pozwala) i wyczyść SELL
-   if(CrossUpConfirmed(ctUp) && ctUp!=lastCrossUpTime)
-   {
-      CancelOurPendings();
-      ResetAllState(true);
-      lastCrossUpTime=ctUp;
+    // CROSS UP
+    if(CrossUpConfirmed(ctUp) && ctUp != lastCrossUpTime)
+    {
+        CancelOurPendings();
+        ResetAllState(true);
 
-      if(InpDirection!=SELL_ONLY){
-         buyArmed=true;
-         tradedThisCrossUp=false;
-         swingHigh = ask;
-         Print("Cross UP potwierdzony -> BUY: szukam szczytu i cofki ≥ ", InpPullbackPips, " pips.");
-      }else{
-         buyArmed=false;
-      }
-   }
+        lastCrossUpTime = ctUp;
+        if(InpDirection != SELL_ONLY)
+            buyArmed = true;
+    }
 
-   //--- 2) SELL — pilnowanie cofki w górę i wystawienie SELL STOP
-   if(sellArmed && !(InpOnePosPerCross && tradedThisCrossDown))
-   {
-      if(!pullbackSeenSell)
-      {
-         if(swingLow==0.0 || bid < swingLow)
-            swingLow=bid;
+    //=====================================================
+    // 2) Pobranie aktualnej wolnej MA
+    //=====================================================
+    double f0, s0;
+    if(!ReadMA(0, f0, s0))
+        return;
 
-         double triggerUp = swingLow + InpPullbackPips*pp;
-         if(ask >= triggerUp)
-         {
-            pullbackSeenSell=true;
-            PrintFormat("SELL: cofka ≥ %d pips (swingLow=%.5f). Próba wystawienia SELL STOP.", InpPullbackPips, swingLow);
-            if(!PlaceSellStopAtSwingLow())
-               pullbackSeenSell=false; // spróbuj ponownie
-         }
-      }
+    double slowMA = s0;
 
-      // jeśli oczekujące zniknęło — sprawdź co dalej
-      if(pendingSellTicket!=0 && !OrderSelect(pendingSellTicket))
-      {
-         pendingSellTicket=0;
-         if(!(InpOnePosPerCross && tradedThisCrossDown))
-         {
-            pullbackSeenSell=false;
-            swingLow=bid;
-         }
-      }
-   }
+    //=====================================================
+    // 3) SELL — wejście po powrocie ceny do slowMA
+    //=====================================================
+    if(sellArmed && !(InpOnePosPerCross && tradedThisCrossDown))
+    {
+        // nie mamy zlecenia → czekamy na powrót ask >= slowMA
+        if(pendingSellTicket == 0)
+        {
+            if(ask >= slowMA)
+            {
+                int lookback = (InpSwingLookback > 0 ? InpSwingLookback : 15);
+                double lowN = LowestLow(lookback);
 
-   //--- 3) BUY — pilnowanie cofki w dół i wystawienie BUY STOP
-   if(buyArmed && !(InpOnePosPerCross && tradedThisCrossUp))
-   {
-      if(!pullbackSeenBuy)
-      {
-         if(swingHigh==0.0 || ask > swingHigh)
-            swingHigh=ask;
+                if(lowN > 0.0)
+                {
+                    swingLow = lowN;
+                    double pullbackPips = (slowMA - swingLow) / pp;
 
-         double triggerDn = swingHigh - InpPullbackPips*pp;
-         if(bid <= triggerDn)
-         {
-            pullbackSeenBuy=true;
-            PrintFormat("BUY: cofka ≥ %d pips (swingHigh=%.5f). Próba wystawienia BUY STOP.", InpPullbackPips, swingHigh);
-            if(!PlaceBuyStopAtSwingHigh())
-               pullbackSeenBuy=false; // spróbuj ponownie
-         }
-      }
+                    bool okToPlace = true;
 
-      // jeśli oczekujące zniknęło — sprawdź co dalej
-      if(pendingBuyTicket!=0 && !OrderSelect(pendingBuyTicket))
-      {
-         pendingBuyTicket=0;
-         if(!(InpOnePosPerCross && tradedThisCrossUp))
-         {
-            pullbackSeenBuy=false;
-            swingHigh=ask;
-         }
-      }
-   }
+                    if(InpUsePullbackFilter)
+                    {
+                        if(pullbackPips < InpPullbackPips)
+                        {
+                            PrintFormat("SELL: cofka %.1f pips < %.1f pips — brak zlecenia.",
+                                        pullbackPips, (double)InpPullbackPips);
+                            okToPlace = false;
+                        }
+                    }
+
+                    if(okToPlace)
+                    {
+                        PrintFormat("SELL: powrót do MA=%.5f, LOW(%d)=%.5f, cofka=%.1f pips → ustawiam SELL STOP",
+                                    slowMA, lookback, swingLow, pullbackPips);
+                        PlaceSellStopAtSwingLow();
+                    }
+                }
+            }
+        }
+        else
+        {
+            // zlecenie oczekujące zniknęło → reset
+            if(!OrderSelect(pendingSellTicket))
+            {
+                pendingSellTicket = 0;
+            }
+        }
+    }
+
+    //=====================================================
+    // 4) BUY — wejście po powrocie ceny do slowMA
+    //=====================================================
+    if(buyArmed && !(InpOnePosPerCross && tradedThisCrossUp))
+    {
+        // brak zlecenia → czekamy aż bid <= slowMA
+        if(pendingBuyTicket == 0)
+        {
+            if(bid <= slowMA)
+            {
+                int lookback = (InpSwingLookback > 0 ? InpSwingLookback : 15);
+                double highN = HighestHigh(lookback);
+
+                if(highN > 0.0)
+                {
+                    swingHigh = highN;
+                    double pullbackPips = (swingHigh - slowMA) / pp;
+
+                    bool okToPlace = true;
+
+                    if(InpUsePullbackFilter)
+                    {
+                        if(pullbackPips < InpPullbackPips)
+                        {
+                            PrintFormat("BUY : cofka %.1f pips < %.1f pips — brak zlecenia.",
+                                        pullbackPips, (double)InpPullbackPips);
+                            okToPlace = false;
+                        }
+                    }
+
+                    if(okToPlace)
+                    {
+                        PrintFormat("BUY : powrót do MA=%.5f, HIGH(%d)=%.5f, cofka=%.1f pips → ustawiam BUY STOP",
+                                    slowMA, lookback, swingHigh, pullbackPips);
+                        PlaceBuyStopAtSwingHigh();
+                    }
+                }
+            }
+        }
+        else
+        {
+            if(!OrderSelect(pendingBuyTicket))
+            {
+                pendingBuyTicket = 0;
+            }
+        }
+    }
 }
 
 //=========================== OnTradeTransaction ====================//
