@@ -11,19 +11,19 @@ CTrade trade;
 
 //=========================== Parametry =============================//
 input ENUM_MA_METHOD InpMaMethod        = MODE_SMA; // EMA/SMA/SMMA/LWMA
-input int            InpFastPeriod      = 10;        // szybka MA
-input int            InpSlowPeriod      = 100;       // wolna MA
-input int            InpPullbackPips    = 300;        // min cofka (pipsy)
+input int            InpFastPeriod      = 2;        // szybka MA
+input int            InpSlowPeriod      = 10;       // wolna MA
+input int            InpPullbackPips    = 100;        // min cofka (pipsy)
 input double         InpLots            = 0.10;     // wolumen
-input int            InpSL_Pips         = 400;        // SL (pipsy; 0 = brak)
-input int            InpTP_Pips         = 200;        // TP (pipsy; 0 = brak)
-input double         InpBreakLowPips    = -200;      // przebicie Low dla SELL STOP
-input double         InpBreakHighPips   = -200;      // przebicie High dla BUY  STOP
-input int            InpExpireMinutes   = 25;      // wygaśnięcie oczekujących (0=GTC)
+input int            InpSL_Pips         = 200;        // SL (pipsy; 0 = brak)
+input int            InpTP_Pips         = 100;        // TP (pipsy; 0 = brak)
+input double         InpBreakLowPips    = -100;      // przebicie Low dla SELL STOP
+input double         InpBreakHighPips   = -100;      // przebicie High dla BUY  STOP
+input int            InpExpireMinutes   = 6;      // wygaśnięcie oczekujących (0=GTC)
 input long           InpMagic           = 20250810; // magic
-input int            InpSlippagePts     = 10;       // maks. odchylenie (punkty)
+input int            InpSlippagePts     = 12;       // maks. odchylenie (punkty)
 input bool           InpOnePosPerCross  = false;     // jedna pozycja na przecięcie
-input int            InpSwingLookback   = 15;       // ile ostatnich świec do wyznaczenia high/low
+input int            InpSwingLookback   = 5;       // ile ostatnich świec do wyznaczenia high/low
 input bool InpUsePullbackFilter = true; // używać filtra cofki (true/false)
 
 // --- Nowe: kontrola spreadu ---
@@ -244,11 +244,27 @@ int OnInit(){ ResetAllState(); return(INIT_SUCCEEDED); }
 
 void OnTick()
 {
+    //-----------------------------------------------------
+    // 0) Kontrola czasu handlu
+    //-----------------------------------------------------
+    bool time_ok = IsTimeToTrade();
 
-if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
+    if(!time_ok)
+    {
+        // Poza godzinami: usuń wszystkie nasze pendingi
+        // aby nie otwierały pozycji po czasie
+        if(pendingSellTicket != 0 || pendingBuyTicket != 0)
+        {
+            Print("Poza czasem handlu – kasuję wszystkie pendingi:");
+            CancelOurPendings();
+        }
 
+        return;
+    }
 
-
+    //-----------------------------------------------------
+    // 1) Przygotowanie MA
+    //-----------------------------------------------------
     if(!PrepareMAs())
         return;
 
@@ -256,14 +272,17 @@ if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
     double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     double pp  = Pip();
 
-    //=====================================================
-    // 0) Kontrola spreadu
-    //=====================================================
+    //-----------------------------------------------------
+    // 2) Kontrola spreadu (usuń pendingi jeśli przekroczony)
+    //-----------------------------------------------------
     if(InpMaxSpreadPips > 0.0 && InpGuardPendingsBySpread)
     {
         double sp = SpreadPips();
         if(sp > InpMaxSpreadPips)
         {
+            PrintFormat("Spread=%.1f > limit=%.1f → kasuję pendingi.",
+                sp, InpMaxSpreadPips);
+
             if(pendingSellTicket != 0)
             {
                 trade.OrderDelete(pendingSellTicket);
@@ -277,48 +296,74 @@ if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
         }
     }
 
-    //=====================================================
-    // 1) Nowe przecięcia MA
-    //=====================================================
+    //-----------------------------------------------------
+    // 3) Sprawdzenie przecięć MA
+    //-----------------------------------------------------
     datetime ctDown = 0, ctUp = 0;
 
-    // CROSS DOWN
+    // ---- CROSS DOWN ----
     if(CrossDownConfirmed(ctDown) && ctDown != lastCrossDownTime)
     {
+        // Usuń przeciwne BUY STOP
+        if(pendingBuyTicket != 0)
+        {
+            trade.OrderDelete(pendingBuyTicket);
+            pendingBuyTicket = 0;
+            Print("CROSS DOWN → kasuję BUY STOP.");
+        }
+
+        // Usuń inne pendingi
         CancelOurPendings();
+
+        // Reset stanów z zachowaniem czasu przecięć
         ResetAllState(true);
 
         lastCrossDownTime = ctDown;
         if(InpDirection != BUY_ONLY)
             sellArmed = true;
+
+        Print("CROSS DOWN – aktywuję SELL MODE.");
     }
 
-    // CROSS UP
+    // ---- CROSS UP ----
     if(CrossUpConfirmed(ctUp) && ctUp != lastCrossUpTime)
     {
+        // Usuń przeciwne SELL STOP
+        if(pendingSellTicket != 0)
+        {
+            trade.OrderDelete(pendingSellTicket);   // POPRAWIONA LITERÓWKA
+            pendingSellTicket = 0;
+            Print("CROSS UP → kasuję SELL STOP.");
+        }
+
+        // Usuń pozostałe pendingi
         CancelOurPendings();
+
+        // Reset z zachowaniem czasów przecięć
         ResetAllState(true);
 
         lastCrossUpTime = ctUp;
         if(InpDirection != SELL_ONLY)
             buyArmed = true;
+
+        Print("CROSS UP – aktywuję BUY MODE.");
     }
 
-    //=====================================================
-    // 2) Pobranie aktualnej wolnej MA
-    //=====================================================
+    //-----------------------------------------------------
+    // 4) Aktualna slow MA
+    //-----------------------------------------------------
     double f0, s0;
     if(!ReadMA(0, f0, s0))
         return;
 
     double slowMA = s0;
 
-    //=====================================================
-    // 3) SELL — wejście po powrocie ceny do slowMA
-    //=====================================================
+    //-----------------------------------------------------
+    // 5) SELL – wejście po powrocie do slowMA
+    //-----------------------------------------------------
     if(sellArmed && !(InpOnePosPerCross && tradedThisCrossDown))
     {
-        // nie mamy zlecenia → czekamy na powrót ask >= slowMA
+        // brak zlecenia → czekamy aż cena wróci do slowMA
         if(pendingSellTicket == 0)
         {
             if(ask >= slowMA)
@@ -337,16 +382,19 @@ if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
                     {
                         if(pullbackPips < InpPullbackPips)
                         {
-                            PrintFormat("SELL: cofka %.1f pips < %.1f pips — brak zlecenia.",
-                                        pullbackPips, (double)InpPullbackPips);
+                            PrintFormat("SELL: cofka %.1f < %.1f → brak zlecenia.",
+                                pullbackPips, (double)InpPullbackPips);
                             okToPlace = false;
                         }
                     }
 
                     if(okToPlace)
                     {
-                        PrintFormat("SELL: powrót do MA=%.5f, LOW(%d)=%.5f, cofka=%.1f pips → ustawiam SELL STOP",
-                                    slowMA, lookback, swingLow, pullbackPips);
+                        PrintFormat(
+                            "SELL: powrót do slowMA=%.5f, LOW(%d)=%.5f, cofka=%.1f → SELL STOP",
+                            slowMA, lookback, swingLow, pullbackPips
+                        );
+
                         PlaceSellStopAtSwingLow();
                     }
                 }
@@ -354,20 +402,17 @@ if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
         }
         else
         {
-            // zlecenie oczekujące zniknęło → reset
+            // Jeśli broker usunął pending
             if(!OrderSelect(pendingSellTicket))
-            {
                 pendingSellTicket = 0;
-            }
         }
     }
 
-    //=====================================================
-    // 4) BUY — wejście po powrocie ceny do slowMA
-    //=====================================================
+    //-----------------------------------------------------
+    // 6) BUY – wejście po powrocie do slowMA
+    //-----------------------------------------------------
     if(buyArmed && !(InpOnePosPerCross && tradedThisCrossUp))
     {
-        // brak zlecenia → czekamy aż bid <= slowMA
         if(pendingBuyTicket == 0)
         {
             if(bid <= slowMA)
@@ -386,16 +431,19 @@ if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
                     {
                         if(pullbackPips < InpPullbackPips)
                         {
-                            PrintFormat("BUY : cofka %.1f pips < %.1f pips — brak zlecenia.",
-                                        pullbackPips, (double)InpPullbackPips);
+                            PrintFormat("BUY: cofka %.1f < %.1f → brak zlecenia.",
+                                pullbackPips, (double)InpPullbackPips);
                             okToPlace = false;
                         }
                     }
 
                     if(okToPlace)
                     {
-                        PrintFormat("BUY : powrót do MA=%.5f, HIGH(%d)=%.5f, cofka=%.1f pips → ustawiam BUY STOP",
-                                    slowMA, lookback, swingHigh, pullbackPips);
+                        PrintFormat(
+                            "BUY: powrót do MA=%.5f, HIGH(%d)=%.5f, cofka=%.1f → BUY STOP",
+                            slowMA, lookback, swingHigh, pullbackPips
+                        );
+
                         PlaceBuyStopAtSwingHigh();
                     }
                 }
@@ -404,12 +452,11 @@ if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
         else
         {
             if(!OrderSelect(pendingBuyTicket))
-            {
                 pendingBuyTicket = 0;
-            }
         }
     }
 }
+
 
 //=========================== OnTradeTransaction ====================//
 void OnTradeTransaction(const MqlTradeTransaction &trans,
