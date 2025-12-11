@@ -238,6 +238,41 @@ double HighestHigh(int barsBack)
    }
    return high;
 }
+//---------------------- Najniższe CLOSE z ostatnich N świec ---------//
+double LowestClose(int barsBack)
+{
+   if(barsBack <= 0) return 0.0;
+
+   MqlRates r[];
+   int copied = CopyRates(_Symbol, PERIOD_CURRENT, 1, barsBack, r); // od świecy 1 (zamknięta)
+   if(copied <= 0) return 0.0;
+
+   double price = r[0].close;
+   for(int i = 1; i < copied; i++)
+   {
+      if(r[i].close < price)
+         price = r[i].close;
+   }
+   return price;
+}
+
+//---------------------- Najwyższe CLOSE z ostatnich N świec --------//
+double HighestClose(int barsBack)
+{
+   if(barsBack <= 0) return 0.0;
+
+   MqlRates r[];
+   int copied = CopyRates(_Symbol, PERIOD_CURRENT, 1, barsBack, r);
+   if(copied <= 0) return 0.0;
+
+   double price = r[0].close;
+   for(int i = 1; i < copied; i++)
+   {
+      if(r[i].close > price)
+         price = r[i].close;
+   }
+   return price;
+}
 
 //=============================== OnInit ============================//
 int OnInit(){ ResetAllState(); return(INIT_SUCCEEDED); }
@@ -251,14 +286,15 @@ void OnTick()
 
     if(!time_ok)
     {
-        // Poza godzinami: usuń wszystkie nasze pendingi
-        // aby nie otwierały pozycji po czasie
         if(pendingSellTicket != 0 || pendingBuyTicket != 0)
         {
             Print("Poza czasem handlu – kasuję wszystkie pendingi:");
             CancelOurPendings();
+            pendingSellTicket = 0;
+            pendingBuyTicket  = 0;
+            pullbackSeenBuy   = false;
+            pullbackSeenSell  = false;
         }
-
         return;
     }
 
@@ -273,26 +309,43 @@ void OnTick()
     double pp  = Pip();
 
     //-----------------------------------------------------
-    // 2) Kontrola spreadu (usuń pendingi jeśli przekroczony)
+    // 2) Kontrola spreadu + kasowanie pendingów
     //-----------------------------------------------------
     if(InpMaxSpreadPips > 0.0 && InpGuardPendingsBySpread)
     {
         double sp = SpreadPips();
         if(sp > InpMaxSpreadPips)
         {
-            PrintFormat("Spread=%.1f > limit=%.1f → kasuję pendingi.",
-                sp, InpMaxSpreadPips);
+            PrintFormat("Spread %.1f > %.1f → kasuję pendingi.", sp, InpMaxSpreadPips);
 
-            if(pendingSellTicket != 0)
-            {
-                trade.OrderDelete(pendingSellTicket);
-                pendingSellTicket = 0;
-            }
-            if(pendingBuyTicket != 0)
-            {
-                trade.OrderDelete(pendingBuyTicket);
-                pendingBuyTicket = 0;
-            }
+            CancelOurPendings();
+            pendingSellTicket = 0;
+            pendingBuyTicket  = 0;
+            pullbackSeenBuy   = false;
+            pullbackSeenSell  = false;
+        }
+    }
+
+    //-----------------------------------------------------
+    // 2b) Wykrywanie automatycznie wygasłych pendingów
+    //-----------------------------------------------------
+    if(pendingSellTicket != 0)
+    {
+        if(!OrderSelect(pendingSellTicket))  // MT5 skasował pending (expiration)
+        {
+            Print("SELL STOP wygasł → reset.");
+            pendingSellTicket = 0;
+            pullbackSeenSell  = false;
+        }
+    }
+
+    if(pendingBuyTicket != 0)
+    {
+        if(!OrderSelect(pendingBuyTicket))  // MT5 skasował pending (expiration)
+        {
+            Print("BUY STOP wygasł → reset.");
+            pendingBuyTicket = 0;
+            pullbackSeenBuy  = false;
         }
     }
 
@@ -304,49 +357,41 @@ void OnTick()
     // ---- CROSS DOWN ----
     if(CrossDownConfirmed(ctDown) && ctDown != lastCrossDownTime)
     {
-        // Usuń przeciwne BUY STOP
-        if(pendingBuyTicket != 0)
-        {
-            trade.OrderDelete(pendingBuyTicket);
-            pendingBuyTicket = 0;
-            Print("CROSS DOWN → kasuję BUY STOP.");
-        }
-
-        // Usuń inne pendingi
+        // 🔥 Natychmiast usuń wszystko
         CancelOurPendings();
+        pendingSellTicket = 0;
+        pendingBuyTicket  = 0;
+        pullbackSeenSell  = false;
+        pullbackSeenBuy   = false;
 
-        // Reset stanów z zachowaniem czasu przecięć
         ResetAllState(true);
 
         lastCrossDownTime = ctDown;
+
         if(InpDirection != BUY_ONLY)
             sellArmed = true;
 
-        Print("CROSS DOWN – aktywuję SELL MODE.");
+        Print("CROSS DOWN – aktywuję SELL MODE (wszystkie pendingi anulowane).");
     }
 
     // ---- CROSS UP ----
     if(CrossUpConfirmed(ctUp) && ctUp != lastCrossUpTime)
     {
-        // Usuń przeciwne SELL STOP
-        if(pendingSellTicket != 0)
-        {
-            trade.OrderDelete(pendingSellTicket);   // POPRAWIONA LITERÓWKA
-            pendingSellTicket = 0;
-            Print("CROSS UP → kasuję SELL STOP.");
-        }
-
-        // Usuń pozostałe pendingi
+        // 🔥 Natychmiast usuń wszystko
         CancelOurPendings();
+        pendingSellTicket = 0;
+        pendingBuyTicket  = 0;
+        pullbackSeenSell  = false;
+        pullbackSeenBuy   = false;
 
-        // Reset z zachowaniem czasów przecięć
         ResetAllState(true);
 
         lastCrossUpTime = ctUp;
+
         if(InpDirection != SELL_ONLY)
             buyArmed = true;
 
-        Print("CROSS UP – aktywuję BUY MODE.");
+        Print("CROSS UP – aktywuję BUY MODE (wszystkie pendingi anulowane).");
     }
 
     //-----------------------------------------------------
@@ -359,21 +404,21 @@ void OnTick()
     double slowMA = s0;
 
     //-----------------------------------------------------
-    // 5) SELL – wejście po powrocie do slowMA
+    // 5) SELL – wejście po cofce do MA
     //-----------------------------------------------------
     if(sellArmed && !(InpOnePosPerCross && tradedThisCrossDown))
     {
-        // brak zlecenia → czekamy aż cena wróci do slowMA
         if(pendingSellTicket == 0)
         {
             if(ask >= slowMA)
             {
                 int lookback = (InpSwingLookback > 0 ? InpSwingLookback : 15);
-                double lowN = LowestLow(lookback);
+                double lowN  = LowestClose(lookback);
 
                 if(lowN > 0.0)
                 {
                     swingLow = lowN;
+
                     double pullbackPips = (slowMA - swingLow) / pp;
 
                     bool okToPlace = true;
@@ -383,17 +428,15 @@ void OnTick()
                         if(pullbackPips < InpPullbackPips)
                         {
                             PrintFormat("SELL: cofka %.1f < %.1f → brak zlecenia.",
-                                pullbackPips, (double)InpPullbackPips);
+                                        pullbackPips, (double)InpPullbackPips);
                             okToPlace = false;
                         }
                     }
 
                     if(okToPlace)
                     {
-                        PrintFormat(
-                            "SELL: powrót do slowMA=%.5f, LOW(%d)=%.5f, cofka=%.1f → SELL STOP",
-                            slowMA, lookback, swingLow, pullbackPips
-                        );
+                        PrintFormat("SELL: powrót do MA=%.5f, swingLow=%.5f, cofka=%.1f → SELL STOP",
+                                    slowMA, swingLow, pullbackPips);
 
                         PlaceSellStopAtSwingLow();
                     }
@@ -402,14 +445,13 @@ void OnTick()
         }
         else
         {
-            // Jeśli broker usunął pending
             if(!OrderSelect(pendingSellTicket))
                 pendingSellTicket = 0;
         }
     }
 
     //-----------------------------------------------------
-    // 6) BUY – wejście po powrocie do slowMA
+    // 6) BUY – wejście po cofce do MA
     //-----------------------------------------------------
     if(buyArmed && !(InpOnePosPerCross && tradedThisCrossUp))
     {
@@ -418,11 +460,12 @@ void OnTick()
             if(bid <= slowMA)
             {
                 int lookback = (InpSwingLookback > 0 ? InpSwingLookback : 15);
-                double highN = HighestHigh(lookback);
+                double highN = HighestClose(lookback);
 
                 if(highN > 0.0)
                 {
                     swingHigh = highN;
+
                     double pullbackPips = (swingHigh - slowMA) / pp;
 
                     bool okToPlace = true;
@@ -432,17 +475,15 @@ void OnTick()
                         if(pullbackPips < InpPullbackPips)
                         {
                             PrintFormat("BUY: cofka %.1f < %.1f → brak zlecenia.",
-                                pullbackPips, (double)InpPullbackPips);
+                                        pullbackPips, (double)InpPullbackPips);
                             okToPlace = false;
                         }
                     }
 
                     if(okToPlace)
                     {
-                        PrintFormat(
-                            "BUY: powrót do MA=%.5f, HIGH(%d)=%.5f, cofka=%.1f → BUY STOP",
-                            slowMA, lookback, swingHigh, pullbackPips
-                        );
+                        PrintFormat("BUY: powrót do MA=%.5f, swingHigh=%.5f, cofka=%.1f → BUY STOP",
+                                    slowMA, swingHigh, pullbackPips);
 
                         PlaceBuyStopAtSwingHigh();
                     }
@@ -457,43 +498,6 @@ void OnTick()
     }
 }
 
-
-//=========================== OnTradeTransaction ====================//
-void OnTradeTransaction(const MqlTradeTransaction &trans,
-                        const MqlTradeRequest &request,
-                        const MqlTradeResult &result)
-{
-   if(!InpOnePosPerCross) return;
-
-   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
-   {
-      ulong deal = trans.deal;
-      if(deal==0) return;
-      if(!HistoryDealSelect(deal)) return;
-
-      string sym   = HistoryDealGetString(deal, DEAL_SYMBOL);
-      long   dtype = (long)HistoryDealGetInteger(deal, DEAL_TYPE);
-      long   dmag  = (long)HistoryDealGetInteger(deal, DEAL_MAGIC);
-
-      if(sym==_Symbol && dmag==InpMagic)
-      {
-         if(dtype==DEAL_TYPE_SELL)
-         {
-            tradedThisCrossDown = true;
-            sellArmed = false;
-            CancelOurPendings();
-            Print("SELL otwarty -> blokuję dalsze wejścia do kolejnego cross-down.");
-         }
-         else if(dtype==DEAL_TYPE_BUY)
-         {
-            tradedThisCrossUp = true;
-            buyArmed = false;
-            CancelOurPendings();
-            Print("BUY otwarty -> blokuję dalsze wejścia do kolejnego cross-up.");
-         }
-      }
-   }
-}
 
 //=============================== OnDeinit ===========================//
 void OnDeinit(const int reason){ /* nic */ }
