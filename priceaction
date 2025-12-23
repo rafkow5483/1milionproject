@@ -1,0 +1,90 @@
+//+------------------------------------------------------------------+
+//| Retrace High/Low EA                                              |
+//| SELL: high -> retrace 50 pips                                    |
+//| BUY : low  -> retrace 50 pips                                    |
+//+------------------------------------------------------------------+
+#property strict
+
+#include <Trade/Trade.mqh>
+CTrade trade;
+
+input double Lots = 0.1;
+input int RetracePips = 50;
+input int SL_Pips = 50;
+input int TP_Pips = 50;
+
+double HighestPrice = 0.0;
+double LowestPrice  = 0.0;
+
+double Pip()
+{
+   if(_Digits == 3 || _Digits == 5)
+      return _Point * 10;
+   return _Point;
+}
+
+bool HasPosition()
+{
+   return PositionSelect(_Symbol);
+}
+
+void OnTick()
+{
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double pip = Pip();
+
+   // INIT przy pierwszym ticku
+   if(HighestPrice == 0.0)
+   {
+      HighestPrice = bid;
+      LowestPrice  = bid;
+   }
+
+   // ===============================
+   // AKTUALIZACJA HIGH / LOW
+   // ===============================
+   if(bid > HighestPrice)
+      HighestPrice = bid;
+
+   if(bid < LowestPrice)
+      LowestPrice = bid;
+
+   // ===============================
+   // SELL – cofka od HIGH
+   // ===============================
+   if(!HasPosition())
+   {
+      if(HighestPrice - bid >= RetracePips * pip)
+      {
+         double sl = ask + SL_Pips * pip;
+         double tp = bid - TP_Pips * pip;
+
+         if(trade.Sell(Lots, _Symbol, bid, sl, tp))
+         {
+            Print("SELL opened from retrace. High=", HighestPrice);
+            HighestPrice = bid; // reset po wejściu
+            LowestPrice  = bid;
+         }
+      }
+   }
+
+   // ===============================
+   // BUY – cofka od LOW
+   // ===============================
+   if(!HasPosition())
+   {
+      if(bid - LowestPrice >= RetracePips * pip)
+      {
+         double sl = bid - SL_Pips * pip;
+         double tp = ask + TP_Pips * pip;
+
+         if(trade.Buy(Lots, _Symbol, ask, sl, tp))
+         {
+            Print("BUY opened from retrace. Low=", LowestPrice);
+            HighestPrice = bid; // reset po wejściu
+            LowestPrice  = bid;
+         }
+      }
+   }
+}
