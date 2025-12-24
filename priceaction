@@ -52,18 +52,19 @@ void OnTick()
 
    // ===============================
    // SELL – cofka od HIGH
+   // TERAZ: BUY
    // ===============================
    if(!HasPosition())
    {
       if(HighestPrice - bid >= RetracePips * pip)
       {
-         double sl = ask + SL_Pips * pip;
-         double tp = bid - TP_Pips * pip;
+         double sl = bid - SL_Pips * pip;
+         double tp = ask + TP_Pips * pip;
 
-         if(trade.Sell(Lots, _Symbol, bid, sl, tp))
+         if(trade.Buy(Lots, _Symbol, ask, sl, tp))
          {
             Print("SELL opened from retrace. High=", HighestPrice);
-            HighestPrice = bid; // reset po wejściu
+            HighestPrice = bid;
             LowestPrice  = bid;
          }
       }
@@ -71,18 +72,19 @@ void OnTick()
 
    // ===============================
    // BUY – cofka od LOW
+   // TERAZ: SELL
    // ===============================
    if(!HasPosition())
    {
       if(bid - LowestPrice >= RetracePips * pip)
       {
-         double sl = bid - SL_Pips * pip;
-         double tp = ask + TP_Pips * pip;
+         double sl = ask + SL_Pips * pip;
+         double tp = bid - TP_Pips * pip;
 
-         if(trade.Buy(Lots, _Symbol, ask, sl, tp))
+         if(trade.Sell(Lots, _Symbol, bid, sl, tp))
          {
             Print("BUY opened from retrace. Low=", LowestPrice);
-            HighestPrice = bid; // reset po wejściu
+            HighestPrice = bid;
             LowestPrice  = bid;
          }
       }
