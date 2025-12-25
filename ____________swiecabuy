@@ -1,0 +1,98 @@
+//+------------------------------------------------------------------+
+//| SWIECA_BUY_PRO.mq5                                                |
+//| Manual TP/SL by pips (spread-proof)                               |
+//+------------------------------------------------------------------+
+#property strict
+
+#include <Trade/Trade.mqh>
+CTrade trade;
+
+// ===== INPUTY =====
+input double Lots      = 0.1;
+input int    TP_Pips   = 50;
+input int    SL_Pips   = 50;
+
+// ===== ZMIENNE =====
+datetime lastBar = 0;
+
+double rememberedBearHigh = 0.0;
+bool   haveBearHigh = false;
+
+//+------------------------------------------------------------------+
+//| PIP                                                              |
+//+------------------------------------------------------------------+
+double Pip()
+{
+   if(_Digits == 3 || _Digits == 5)
+      return _Point * 10;
+   return _Point;
+}
+
+//+------------------------------------------------------------------+
+//| ON TICK                                                          |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   double pip = Pip();
+
+   // ================================================================
+   // 1️⃣ RĘCZNE TP / SL (DZIAŁA NA LIVE BEZ PROBLEMU SPREADU)
+   // ================================================================
+   if(PositionSelect(_Symbol))
+   {
+      double bid       = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+
+      double profitPips = (bid - openPrice) / pip;
+
+      // TAKE PROFIT
+      if(profitPips >= TP_Pips)
+      {
+         trade.PositionClose(_Symbol);
+         return;
+      }
+
+      // STOP LOSS
+      if(profitPips <= -SL_Pips)
+      {
+         trade.PositionClose(_Symbol);
+         return;
+      }
+   }
+
+   // ================================================================
+   // 2️⃣ LOGIKA WEJŚCIA – TYLKO NA NOWEJ ŚWIECY
+   // ================================================================
+   datetime barTime = iTime(_Symbol, _Period, 0);
+   if(barTime == lastBar) return;
+   lastBar = barTime;
+
+   // tylko jedna pozycja
+   if(PositionsTotal() > 0) return;
+
+   // ostatnia zamknięta świeca
+   double open1  = iOpen(_Symbol, _Period, 1);
+   double close1 = iClose(_Symbol, _Period, 1);
+   double high1  = iHigh(_Symbol, _Period, 1);
+
+   // świeca spadkowa → zapamiętaj HIGH
+   if(close1 < open1)
+   {
+      rememberedBearHigh = high1;
+      haveBearHigh = true;
+      return;
+   }
+
+   // wybicie HIGH → BUY
+   if(haveBearHigh && close1 > rememberedBearHigh)
+   {
+      double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+      trade.Buy(Lots, _Symbol, price, 0, 0, "Break Bear High");
+
+      // reset
+      haveBearHigh = false;
+      rememberedBearHigh = 0.0;
+   }
+}
+
