@@ -10,10 +10,10 @@ CTrade trade;
 
 // ================= INPUTY =================
 input double Lots            = 0.1;
-input int    TP_Pips         = 40;
-input int    SL_Pips         = 80;
-input int    MaxSpreadPips   = 6;
-input int    BreakBufferPips = 2;
+input int    TP_Pips         = 50;
+input int    SL_Pips         = 500;
+input int    MaxSpreadPips   = 10;
+input int    BreakBufferPips = 50;
 
 // ================= ZMIENNE =================
 datetime lastBar = 0;
