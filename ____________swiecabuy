@@ -1,22 +1,26 @@
 //+------------------------------------------------------------------+
-//| SWIECA_BUY_PRO.mq5                                                |
-//| Manual TP/SL by pips (spread-proof)                               |
+//| SWIECA_BUY_FINAL_PRO_SPREAD.mq5                                   |
+//| TP zapamiętane + retry close + spread filter on ENTRY            |
 //+------------------------------------------------------------------+
 #property strict
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-// ===== INPUTY =====
-input double Lots      = 0.1;
-input int    TP_Pips   = 50;
-input int    SL_Pips   = 50;
+// ================= INPUTY =================
+input double Lots          = 0.1;
+input int    TP_Pips       = 50;
+input int    SL_Pips       = 50;
+input int    MaxSpreadPips = 6;   // 🔥 FILTR SPREADU (TYLKO WEJŚCIE)
 
-// ===== ZMIENNE =====
+// ================= ZMIENNE =================
 datetime lastBar = 0;
 
 double rememberedBearHigh = 0.0;
 bool   haveBearHigh = false;
+
+bool   tpHit = false;
+int    closeAttempts = 0;
 
 //+------------------------------------------------------------------+
 //| PIP                                                              |
@@ -36,7 +40,7 @@ void OnTick()
    double pip = Pip();
 
    // ================================================================
-   // 1️⃣ RĘCZNE TP / SL (DZIAŁA NA LIVE BEZ PROBLEMU SPREADU)
+   // 1️⃣ ZARZĄDZANIE OTWARTĄ POZYCJĄ (TP / SL + RETRY)
    // ================================================================
    if(PositionSelect(_Symbol))
    {
@@ -45,18 +49,46 @@ void OnTick()
 
       double profitPips = (bid - openPrice) / pip;
 
-      // TAKE PROFIT
+      // zapamiętaj TP
       if(profitPips >= TP_Pips)
+         tpHit = true;
+
+      // ===== TAKE PROFIT =====
+      if(tpHit)
       {
-         trade.PositionClose(_Symbol);
-         return;
+         if(trade.PositionClose(_Symbol))
+         {
+            Print("TP closed after attempts: ", closeAttempts);
+            tpHit = false;
+            closeAttempts = 0;
+            return;
+         }
+         else
+         {
+            closeAttempts++;
+            Print("TP close rejected (", closeAttempts, "): ",
+                  trade.ResultRetcodeDescription());
+            return;
+         }
       }
 
-      // STOP LOSS
+      // ===== STOP LOSS =====
       if(profitPips <= -SL_Pips)
       {
-         trade.PositionClose(_Symbol);
-         return;
+         if(trade.PositionClose(_Symbol))
+         {
+            Print("SL closed after attempts: ", closeAttempts);
+            tpHit = false;
+            closeAttempts = 0;
+            return;
+         }
+         else
+         {
+            closeAttempts++;
+            Print("SL close rejected (", closeAttempts, "): ",
+                  trade.ResultRetcodeDescription());
+            return;
+         }
       }
    }
 
@@ -69,6 +101,16 @@ void OnTick()
 
    // tylko jedna pozycja
    if(PositionsTotal() > 0) return;
+
+   // ===== FILTR SPREADU (TYLKO OTWARCIE) =====
+   double spreadPips = (SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                       - SymbolInfoDouble(_Symbol, SYMBOL_BID)) / pip;
+
+   if(spreadPips > MaxSpreadPips)
+   {
+      Print("ENTRY BLOCKED - spread too high: ", spreadPips);
+      return;
+   }
 
    // ostatnia zamknięta świeca
    double open1  = iOpen(_Symbol, _Period, 1);
@@ -88,11 +130,16 @@ void OnTick()
    {
       double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-      trade.Buy(Lots, _Symbol, price, 0, 0, "Break Bear High");
+      if(trade.Buy(Lots, _Symbol, price, 0, 0, "Break Bear High"))
+      {
+         Print("BUY opened at ", price, " | spread: ", spreadPips);
+         tpHit = false;
+         closeAttempts = 0;
+      }
 
-      // reset
       haveBearHigh = false;
       rememberedBearHigh = 0.0;
    }
 }
+
 
