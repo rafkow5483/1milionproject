@@ -1,32 +1,24 @@
-
 //+------------------------------------------------------------------+
-//| SWIECA_BUY_LIVE_BREAK_OR_CLOSE.mq5                                |
-//| BUY only | Entry on BREAK or CLOSE (whichever first)             |
+//| SWIECA_BUY_CLOSE_OR_BUFFER.mq5                                   |
 //+------------------------------------------------------------------+
 #property strict
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-// ================= INPUTY =================
-input double Lots            = 0.1;
-input int    TP_Pips         = 50;
-input int    SL_Pips         = 500;
-input int    MaxSpreadPips   = 10;
-input int    BreakBufferPips = 50;
+input double Lots = 0.1;
+input int SL_Pips = 50;
+input int TP_Pips = 50;
+input int MaxCandlesWait = 3;
+input int EntryBufferPips = 20;   // tylko do wejścia intrabar
 
-// ================= ZMIENNE =================
 datetime lastBar = 0;
 
+// setup BUY
 double rememberedBearHigh = 0.0;
 bool   haveBearHigh = false;
+int    candlesWaited = 0;
 
-bool   tpHit = false;
-int    closeAttempts = 0;
-
-//+------------------------------------------------------------------+
-//| PIP                                                              |
-//+------------------------------------------------------------------+
 double Pip()
 {
    if(_Digits == 3 || _Digits == 5)
@@ -34,106 +26,97 @@ double Pip()
    return _Point;
 }
 
-//+------------------------------------------------------------------+
-//| ON TICK                                                          |
-//+------------------------------------------------------------------+
-void OnTick()
+void ResetSetup()
 {
+   haveBearHigh = false;
+   rememberedBearHigh = 0.0;
+   candlesWaited = 0;
+}
+
+void StartNewSetup(double high)
+{
+   rememberedBearHigh = high;
+   haveBearHigh = true;
+   candlesWaited = 0;
+}
+
+// =========================
+// INTRABAR – szybkie wejście
+// =========================
+void CheckIntrabarBreak()
+{
+   if(!haveBearHigh) return;
+   if(PositionsTotal() > 0) return;
+
    double pip = Pip();
+   double trigger = rememberedBearHigh + EntryBufferPips * pip;
 
-   // ================================================================
-   // 1️⃣ ZARZĄDZANIE OTWARTĄ POZYCJĄ (TP / SL + RETRY)
-   // ================================================================
-   if(PositionSelect(_Symbol))
-   {
-      double bid       = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-
-      double profitPips = (bid - openPrice) / pip;
-
-      if(profitPips >= TP_Pips)
-         tpHit = true;
-
-      if(tpHit)
-      {
-         if(trade.PositionClose(_Symbol))
-         {
-            tpHit = false;
-            closeAttempts = 0;
-         }
-         return;
-      }
-
-      if(profitPips <= -SL_Pips)
-      {
-         trade.PositionClose(_Symbol);
-         tpHit = false;
-         closeAttempts = 0;
-         return;
-      }
-
-      return; // nie szukaj nowego wejścia
-   }
-
-   // ================================================================
-   // 2️⃣ FILTR SPREADU (TYLKO OTWARCIE)
-   // ================================================================
-   double spreadPips = (SymbolInfoDouble(_Symbol, SYMBOL_ASK)
-                       - SymbolInfoDouble(_Symbol, SYMBOL_BID)) / pip;
-
-   if(spreadPips > MaxSpreadPips)
-      return;
-
-   // ================================================================
-   // 3️⃣ OBSŁUGA NOWEJ ŚWIECY – ZAPAMIĘTAJ HIGH
-   // ================================================================
-   datetime barTime = iTime(_Symbol, _Period, 0);
-   bool newBar = false;
-
-   if(barTime != lastBar)
-   {
-      lastBar = barTime;
-      newBar = true;
-
-      double open1  = iOpen(_Symbol, _Period, 1);
-      double close1 = iClose(_Symbol, _Period, 1);
-      double high1  = iHigh(_Symbol, _Period, 1);
-
-      if(close1 < open1)
-      {
-         rememberedBearHigh = high1;
-         haveBearHigh = true;
-      }
-   }
-
-   if(!haveBearHigh)
-      return;
-
-   // ================================================================
-   // 4️⃣ WEJŚCIE BUY – CO PIERWSZE: BREAK LUB CLOSE
-   // ================================================================
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-   bool breakSignal = ask > rememberedBearHigh + BreakBufferPips * pip;
-   bool closeSignal = false;
-
-   if(newBar)
+   if(ask >= trigger)
    {
-      double close1 = iClose(_Symbol, _Period, 1);
-      if(close1 > rememberedBearHigh)
-         closeSignal = true;
+      double sl = ask - SL_Pips * pip;
+      double tp = ask + TP_Pips * pip;
+
+      trade.Buy(Lots, _Symbol, ask, sl, tp,
+                "BUY intrabar buffer");
+
+      ResetSetup();
+   }
+}
+
+void OnTick()
+{
+   // 🔹 zawsze sprawdzaj szybkie wybicie
+   CheckIntrabarBreak();
+
+   // 🔹 logika świecowa tylko na nowej świecy
+   datetime barTime = iTime(_Symbol, _Period, 0);
+   if(barTime == lastBar) return;
+   lastBar = barTime;
+
+   if(PositionsTotal() > 0) return;
+
+   double open1  = iOpen(_Symbol, _Period, 1);
+   double close1 = iClose(_Symbol, _Period, 1);
+   double high1  = iHigh(_Symbol, _Period, 1);
+
+   bool bearish = (close1 < open1);
+
+   // 🔁 NOWA świeca spadkowa → nowy setup
+   if(bearish)
+   {
+      StartNewSetup(high1);
+      return;
    }
 
-   if(breakSignal || closeSignal)
+   // jeśli setup aktywny
+   if(haveBearHigh)
    {
-      if(trade.Buy(Lots, _Symbol, ask, 0, 0, "BUY break OR close"))
+      candlesWaited++;
+
+      // ❌ timeout
+      if(candlesWaited > MaxCandlesWait)
       {
-         tpHit = false;
-         closeAttempts = 0;
+         ResetSetup();
+         return;
       }
 
-      haveBearHigh = false;
-      rememberedBearHigh = 0.0;
+      // ✅ BUY NA ZAMKNIĘCIU ŚWIECY (BEZ BUFORA)
+      if(close1 > rememberedBearHigh)
+      {
+         double pip = Pip();
+         double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+         double sl = price - SL_Pips * pip;
+         double tp = price + TP_Pips * pip;
+
+         trade.Buy(Lots, _Symbol, price, sl, tp,
+                   "BUY candle close");
+
+         ResetSetup();
+         return;
+      }
    }
 }
 
