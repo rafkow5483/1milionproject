@@ -1,0 +1,167 @@
+//+------------------------------------------------------------------+
+//| SWIECA_BUY_SELL_FINAL.mq5                                        |
+//+------------------------------------------------------------------+
+#property strict
+
+#include <Trade/Trade.mqh>
+CTrade trade;
+
+input double Lots = 0.1;
+input int SL_Pips = 50;
+input int TP_Pips = 50;
+input int MaxCandlesWait = 3;
+input int EntryBufferPips = 20;   // tylko intrabar
+
+datetime lastBar = 0;
+
+// ===== BUY SETUP =====
+double buyBearHigh = 0.0;
+bool   buyActive = false;
+int    buyCandles = 0;
+
+// ===== SELL SETUP =====
+double sellBullLow = 0.0;
+bool   sellActive = false;
+int    sellCandles = 0;
+
+double Pip()
+{
+   if(_Digits == 3 || _Digits == 5)
+      return _Point * 10;
+   return _Point;
+}
+
+void ResetBuy()
+{
+   buyActive = false;
+   buyBearHigh = 0.0;
+   buyCandles = 0;
+}
+
+void ResetSell()
+{
+   sellActive = false;
+   sellBullLow = 0.0;
+   sellCandles = 0;
+}
+
+// =========================
+// INTRABAR – szybkie wejścia
+// =========================
+void CheckIntrabar()
+{
+   if(PositionsTotal() > 0) return;
+
+   double pip = Pip();
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   // BUY intrabar
+   if(buyActive && ask >= buyBearHigh + EntryBufferPips * pip)
+   {
+      trade.Buy(Lots, _Symbol, ask,
+                ask - SL_Pips * pip,
+                ask + TP_Pips * pip,
+                "BUY intrabar");
+
+      ResetBuy();
+      ResetSell();
+      return;
+   }
+
+   // SELL intrabar
+   if(sellActive && bid <= sellBullLow - EntryBufferPips * pip)
+   {
+      trade.Sell(Lots, _Symbol, bid,
+                 bid + SL_Pips * pip,
+                 bid - TP_Pips * pip,
+                 "SELL intrabar");
+
+      ResetBuy();
+      ResetSell();
+      return;
+   }
+}
+
+void OnTick()
+{
+   // 🔥 szybkie wejścia
+   CheckIntrabar();
+
+   // 🔹 logika świecowa tylko na nowej świecy
+   datetime barTime = iTime(_Symbol, _Period, 0);
+   if(barTime == lastBar) return;
+   lastBar = barTime;
+
+   if(PositionsTotal() > 0) return;
+
+   double open1  = iOpen(_Symbol, _Period, 1);
+   double close1 = iClose(_Symbol, _Period, 1);
+   double high1  = iHigh(_Symbol, _Period, 1);
+   double low1   = iLow(_Symbol, _Period, 1);
+
+   bool bullish = close1 > open1;
+   bool bearish = close1 < open1;
+
+   // 🔁 NOWA świeca spadkowa → BUY setup
+   if(bearish)
+   {
+      buyBearHigh = high1;
+      buyActive = true;
+      buyCandles = 0;
+   }
+
+   // 🔁 NOWA świeca wzrostowa → SELL setup
+   if(bullish)
+   {
+      sellBullLow = low1;
+      sellActive = true;
+      sellCandles = 0;
+   }
+
+   // ===== BUY CLOSE LOGIC =====
+   if(buyActive)
+   {
+      buyCandles++;
+
+      if(buyCandles > MaxCandlesWait)
+         ResetBuy();
+      else if(close1 > buyBearHigh)
+      {
+         double pip = Pip();
+         double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+         trade.Buy(Lots, _Symbol, price,
+                   price - SL_Pips * pip,
+                   price + TP_Pips * pip,
+                   "BUY candle close");
+
+         ResetBuy();
+         ResetSell();
+         return;
+      }
+   }
+
+   // ===== SELL CLOSE LOGIC =====
+   if(sellActive)
+   {
+      sellCandles++;
+
+      if(sellCandles > MaxCandlesWait)
+         ResetSell();
+      else if(close1 < sellBullLow)
+      {
+         double pip = Pip();
+         double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+         trade.Sell(Lots, _Symbol, price,
+                    price + SL_Pips * pip,
+                    price - TP_Pips * pip,
+                    "SELL candle close");
+
+         ResetBuy();
+         ResetSell();
+         return;
+      }
+   }
+}
