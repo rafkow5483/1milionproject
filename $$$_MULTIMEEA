@@ -35,6 +35,13 @@ input ENUM_APPLIED_PRICE InpSlowMAAppliedPrice = PRICE_CLOSE; // Slow MA Applied
 input int                InpSlowMAShift        = 0;           // Slow MA shift
 input int    InpRoomLookbackBars = 15;   // Ile świec wstecz do HIGH/LOW
 input double InpMinRoomPips      = 50.0; // Minimalny dystans w pipsach do szczytu/dołka
+input double InpMaxSLPips = 30.0; // Maksymalny SL w pipsach (jeśli większy -> nie otwieraj)
+input bool   InpEnableBreakEven     = true;   // Wlacz BE
+input double InpBreakEvenTriggerPips= 20.0;   // Po ilu pipsach przesun SL na BE
+input double InpBreakEvenOffsetPips = 0.0;    // BE + offset (np. 0 lub 1 pip)
+
+input bool   InpEnableTrailingAfter = true;   // Wlacz TS dopiero po progu
+input double InpTrailingStartPips   = 40.0;   // Od ilu pipsow zysku zaczyna dzialac TS
 
 //
 //	The basic expert uses fixed take profit, stop loss and order size
@@ -43,6 +50,8 @@ input double             InpOrderSize          = 0.01;  // Order size in lots
 input double             InpTakeProfitPips     = 100.0; // Take profit in pips
 input double             InpStopLossPips       = 100.0; // Stop loss in pips
 input double             InpTrailingStopPips   = 20.0;  // Trailing stop pips
+input int    InpStopLookbackBars = 15;   // SL z ilu świec (HIGH/LOW)
+input double InpSLBufferPips      = 0.0; // Bufor pipsów (BUY pod low, SELL nad high)
 
 //
 //	Trades also have a magic number and a comment
@@ -261,7 +270,14 @@ void OnTick() {
 
    // I want to apply the trailing stop to every tick
    // so it goes here before the new bar test
-   if ( TrailingStop > 0 ) ApplyTrailingStop();
+  if(InpEnableBreakEven) ApplyBreakEven();
+
+if ( TrailingStop > 0 )
+{
+   if(!InpEnableTrailingAfter || HasProfitAtLeast(InpTrailingStartPips))
+      ApplyTrailingStop();
+}
+
   if (!IsTimeToTrade()) return; // Jeśli nie, wyjdź z funkcji
    //	Next exit if this is not a new bar
    //	https://youtu.be/XHJPpvI2h50
@@ -323,6 +339,86 @@ bool GetHighestHigh(const int lookback, double &highest)
 
    highest = highs[idx];
    return true;
+}
+bool HasProfitAtLeast(double pipsNeeded)
+{
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(Position.Symbol() != Symbol() || Position.Magic() != InpMagic) continue;
+
+      double openPrice = Position.PriceOpen();
+      double profitPips = 0.0;
+
+      if(Position.PositionType() == POSITION_TYPE_BUY)
+         profitPips = (bid - openPrice) / PipSize(Symbol());
+      else
+         profitPips = (openPrice - ask) / PipSize(Symbol());
+
+      if(profitPips >= pipsNeeded)
+         return true;
+   }
+   return false;
+}
+
+void ApplyBreakEven()
+{
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+   double ask   = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double bid   = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+
+   double minStopDist = (double)SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL) * point;
+   double offset      = PipsToDouble(InpBreakEvenOffsetPips);
+
+   for(int i=PositionsTotal()-1; i>=0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(Position.Symbol() != Symbol() || Position.Magic() != InpMagic) continue;
+
+      double openPrice = Position.PriceOpen();
+      double sl        = Position.StopLoss();
+
+      double profitPips = 0.0;
+      if(Position.PositionType() == POSITION_TYPE_BUY)
+         profitPips = (bid - openPrice) / PipSize(Symbol());
+      else
+         profitPips = (openPrice - ask) / PipSize(Symbol());
+
+      if(profitPips < InpBreakEvenTriggerPips) continue;
+
+      double targetSL = openPrice;
+
+      if(Position.PositionType() == POSITION_TYPE_BUY)
+      {
+         targetSL = openPrice + offset;
+         double maxAllowed = bid - minStopDist;
+         if(minStopDist > 0 && targetSL > maxAllowed) targetSL = maxAllowed;
+
+         if(sl != 0 && sl >= targetSL) continue;
+      }
+      else
+      {
+         targetSL = openPrice - offset;
+         double minAllowed = ask + minStopDist;
+         if(minStopDist > 0 && targetSL < minAllowed) targetSL = minAllowed;
+
+         if(sl != 0 && sl <= targetSL) continue;
+      }
+
+      targetSL = NormalizeDouble(targetSL, Digits());
+
+      ResetLastError();
+      if(!Trade.PositionModify(ticket, targetSL, Position.TakeProfit()))
+      {
+         int err = GetLastError();
+         PrintFormat("BE: Failed to set SL on ticket %I64u to %f, err=%i", ticket, targetSL, err);
+      }
+   }
 }
 
 bool GetLowestLow(const int lookback, double &lowest)
@@ -402,33 +498,96 @@ void OpenTrade( ENUM_ORDER_TYPE type )
       return;
    }
 
-   // --- reszta Twojego OpenTrade() bez zmian ---
-   double price;
-   double sl;
-   double tp;
+   // --- OTWARCIE ---
+   double price = 0.0;
+   double sl    = 0.0;
+   double tp    = 0.0;
 
-   if ( type == ORDER_TYPE_BUY ) {
-      price = SymbolInfoDouble( Symbol(), SYMBOL_ASK );
-      sl    = price - StopLoss;
-      tp    = price + TakeProfit;
+   double ask   = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double bid   = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+
+   // minimalny dystans SL/TP od ceny (w punktach) wymagany przez brokera
+   double minStopDist = (double)SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL) * point;
+
+   // bufor w pipsach (np. 1-3 pips) żeby SL nie stał idealnie na ekstremum
+   double slBuffer = PipsToDouble(InpSLBufferPips);
+
+   if(type == ORDER_TYPE_BUY)
+   {
+      price = ask;
+
+      // SL = najniższe LOW z ostatnich InpStopLookbackBars zamkniętych świec
+      double lowest;
+      if(InpStopLookbackBars <= 0 || !GetLowestLow(InpStopLookbackBars, lowest))
+      {
+         PrintFormat("SKIP BUY: nie moge wyliczyc LOW z %d swiec (SL dynamiczny)", InpStopLookbackBars);
+         return;
+      }
+      sl = lowest - slBuffer;
+
+      tp = price + TakeProfit;
+
+      // SL nie może być za blisko ceny (broker stops level)
+      double maxAllowed = bid - minStopDist; // dla BUY SL musi być <= maxAllowed
+      if(minStopDist > 0 && sl > maxAllowed) sl = maxAllowed;
    }
-   else {
-      price = SymbolInfoDouble( Symbol(), SYMBOL_BID );
-      sl    = price + StopLoss;
-      tp    = price - TakeProfit;
+   else // ORDER_TYPE_SELL
+   {
+      price = bid;
+
+      // SL = najwyższe HIGH z ostatnich InpStopLookbackBars zamkniętych świec
+      double highest;
+      if(InpStopLookbackBars <= 0 || !GetHighestHigh(InpStopLookbackBars, highest))
+      {
+         PrintFormat("SKIP SELL: nie moge wyliczyc HIGH z %d swiec (SL dynamiczny)", InpStopLookbackBars);
+         return;
+      }
+      sl = highest + slBuffer;
+
+      tp = price - TakeProfit;
+
+      // SL nie może być za blisko ceny (broker stops level)
+      double minAllowed = ask + minStopDist; // dla SELL SL musi być >= minAllowed
+      if(minStopDist > 0 && sl < minAllowed) sl = minAllowed;
    }
 
-   price = NormalizeDouble( price, Digits() );
-   sl    = NormalizeDouble( sl, Digits() );
-   tp    = NormalizeDouble( tp, Digits() );
+   // --- LIMIT MAKSYMALNEGO SL (W PIPSACH) ---
+   double slDistPips = 0.0;
+   if(type == ORDER_TYPE_BUY)
+      slDistPips = (price - sl) / PipSize(Symbol());   // BUY: cena - SL
+   else
+      slDistPips = (sl - price) / PipSize(Symbol());   // SELL: SL - cena
 
-   if ( StopLoss == 0 ) sl = 0;
-   if ( TakeProfit == 0 ) tp = 0;
+   if(slDistPips > InpMaxSLPips)
+   {
+      PrintFormat("SKIP %s: SL za duzy (%.1f pips) > limit (%.1f pips). price=%.5f sl=%.5f",
+                  (type==ORDER_TYPE_BUY ? "BUY" : "SELL"),
+                  slDistPips, InpMaxSLPips, price, sl);
+      return;
+   }
 
-   if ( !Trade.PositionOpen( Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment ) ) {
-      Print( "Open failed for %s, %s, price=%f, sl=%f, tp=%f", Symbol(), EnumToString( type ), price, sl, tp );
+   price = NormalizeDouble(price, Digits());
+   sl    = NormalizeDouble(sl, Digits());
+   tp    = NormalizeDouble(tp, Digits());
+
+   // jeśli chcesz zachować możliwość "wyłączenia" TP przez input:
+   if(InpTakeProfitPips == 0) tp = 0;
+
+   // UWAGA: jeśli ustawisz InpStopLossPips=0 to wcześniej miałeś wyłączanie SL,
+   // ale tu SL jest dynamiczny, więc tego nie robimy (żeby nie zniknął SL)
+
+   PrintFormat("OPEN %s: price=%.5f SL=%.5f (%.1f pips) TP=%.5f lookback=%d buffer=%.1f",
+               (type==ORDER_TYPE_BUY ? "BUY" : "SELL"),
+               price, sl, slDistPips, tp, InpStopLookbackBars, InpSLBufferPips);
+
+   if(!Trade.PositionOpen(Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment))
+   {
+      Print("Open failed for %s, %s, price=%f, sl=%f, tp=%f",
+            Symbol(), EnumToString(type), price, sl, tp);
    }
 }
+
 
 bool IsTradeAllowed() {
 
