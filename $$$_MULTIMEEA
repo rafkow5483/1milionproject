@@ -1,6 +1,5 @@
 
 
-
 #property copyright "Copyright 2022, Orchard Forex"
 #property link "https://www.orchardforex.com"
 #property version "1.00"
@@ -76,8 +75,8 @@ enum ENUM_TP_MODE
 };
 
 input ENUM_TP_MODE InpTPMode        = TP_MODE_FIXED; // Tryb TP
-input int          InpTpLookbackBars = 15;            // Z ilu świec brać szczyt/dołek dla TP (jeśli dynamiczny)
 input double       InpTPBufferPips   = 0.0;           // Bufor pipsów od ekstremum (BUY: poniżej high, SELL: powyżej low)
+input bool InpRequireTPGreaterThanSL = true; // TP musi być większe niż SL (inaczej SKIP)
 
 
 // Funkcja sprawdzająca, czy obecny czas mieści się w określonym przedziale
@@ -356,6 +355,49 @@ bool GetLowestLow(const int lookback, double &lowest)
    lowest = lows[idx];
    return true;
 }
+int GetTrendRunBars(bool wantBuyTrend, int maxLookback)
+{
+   int bars = Bars(Symbol(), Period());
+   int limit = MathMin(maxLookback, bars - 2);  // 0=bieżąca, liczymy od 1 (zamknięte)
+   if(limit < 1) return 0;
+
+   double tfFast[];
+   double tfSlow[];
+   ArraySetAsSeries(tfFast, true);
+   ArraySetAsSeries(tfSlow, true);
+
+   // kopiujemy wartości trend MA od świecy 1 wstecz przez "limit" świec
+   if(CopyBuffer(TrendFastHandle, 0, 1, limit, tfFast) < limit) return 0;
+   if(CopyBuffer(TrendSlowHandle, 0, 1, limit, tfSlow) < limit) return 0;
+
+   int count = 0;
+   for(int i = 0; i < limit; i++)
+   {
+      if(wantBuyTrend)
+      {
+         if(tfFast[i] > tfSlow[i]) count++;
+         else break;
+      }
+      else
+      {
+         if(tfFast[i] < tfSlow[i]) count++;
+         else break;
+      }
+   }
+   return count;
+}
+
+bool GetHighestHighLimited(int lookback, double &highest)
+{
+   if(lookback < 1) return false;
+   return GetHighestHigh(lookback, highest);
+}
+
+bool GetLowestLowLimited(int lookback, double &lowest)
+{
+   if(lookback < 1) return false;
+   return GetLowestLow(lookback, lowest);
+}
 
 bool GetDynamicTPPrice(const ENUM_ORDER_TYPE type, double entryPrice, double &tpOut)
 {
@@ -365,7 +407,10 @@ bool GetDynamicTPPrice(const ENUM_ORDER_TYPE type, double entryPrice, double &tp
    double tpBuffer = PipsToDouble(InpTPBufferPips);
 
    // lookback do TP:
-    int lookback = InpRoomLookbackBars;
+    int trendBars = GetTrendRunBars(type==ORDER_TYPE_BUY, InpRoomLookbackBars);
+int lookback  = trendBars;
+if(lookback < 1) return false;
+
 // <-- albo tu możesz dać InpRoomLookbackBars jeśli ma być zawsze identycznie
 
    if(type == ORDER_TYPE_BUY)
@@ -410,65 +455,36 @@ bool HasRoomToOpen(const ENUM_ORDER_TYPE type)
 
    if(type == ORDER_TYPE_BUY)
    {
+      int trendBars = GetTrendRunBars(true, InpRoomLookbackBars);
+      if(trendBars < 1) return false;
+
       double highest;
-      if(!GetHighestHigh(InpRoomLookbackBars, highest)) return false;
+      if(!GetHighestHighLimited(trendBars, highest)) return false;
 
       double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
       double room = highest - ask;
-
       return (room >= required);
    }
    else if(type == ORDER_TYPE_SELL)
    {
+      int trendBars = GetTrendRunBars(false, InpRoomLookbackBars);
+      if(trendBars < 1) return false;
+
       double lowest;
-      if(!GetLowestLow(InpRoomLookbackBars, lowest)) return false;
+      if(!GetLowestLowLimited(trendBars, lowest)) return false;
 
       double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
       double room = bid - lowest;
-
       return (room >= required);
    }
 
    return false;
 }
 
+
 void OpenTrade( ENUM_ORDER_TYPE type )
 {
-   if(!HasRoomToOpen(type))
-   {
-      double required = InpMinRoomPips;
-
-      if(type == ORDER_TYPE_BUY)
-      {
-         double highest;
-         if(GetHighestHigh(InpRoomLookbackBars, highest))
-         {
-            double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-            double roomPips = (highest - ask) / PipSize(Symbol());
-            PrintFormat("SKIP BUY: za malo miejsca do szczytu z %d swiec. Room=%.1f pips, wymagane=%.1f",
-                        InpRoomLookbackBars, roomPips, required);
-         }
-         else Print("SKIP BUY: brak danych do wyliczenia highest high");
-      }
-      else if(type == ORDER_TYPE_SELL)
-      {
-         double lowest;
-         if(GetLowestLow(InpRoomLookbackBars, lowest))
-         {
-            double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-            double roomPips = (bid - lowest) / PipSize(Symbol());
-            PrintFormat("SKIP SELL: za malo miejsca do dolka z %d swiec. Room=%.1f pips, wymagane=%.1f",
-                        InpRoomLookbackBars, roomPips, required);
-         }
-         else Print("SKIP SELL: brak danych do wyliczenia lowest low");
-      }
-      return;
-   }
-
-   // --- OTWARCIE ---
-   double price = 0.0;
-   double sl    = 0.0;
-   double tp    = 0.0;
+   bool wantBuy = (type == ORDER_TYPE_BUY);
 
    double ask   = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double bid   = SymbolInfoDouble(Symbol(), SYMBOL_BID);
@@ -477,18 +493,81 @@ void OpenTrade( ENUM_ORDER_TYPE type )
    // minimalny dystans SL/TP od ceny (w punktach) wymagany przez brokera
    double minStopDist = (double)SymbolInfoInteger(Symbol(), SYMBOL_TRADE_STOPS_LEVEL) * point;
 
-   // buffer SL w pipsach
-   double slBuffer = PipsToDouble(InpSLBufferPips);
+   // --- WYZNACZ ENTRY PRICE ---
+   double price = wantBuy ? ask : bid;
 
-   // --- SL DYNAMICZNY ---
-   if(type == ORDER_TYPE_BUY)
+   // --- 1) ROOM: tylko w ramach aktualnego trendu (maks. InpRoomLookbackBars) ---
+   int roomBarsUsed = GetTrendRunBars(wantBuy, InpRoomLookbackBars);
+   if(roomBarsUsed < 1)
    {
-      price = ask;
+      PrintFormat("SKIP %s: brak swiec w aktualnym trendzie (room). ustawione=%d, uzyte=%d",
+                  (wantBuy ? "BUY" : "SELL"), InpRoomLookbackBars, roomBarsUsed);
+      return;
+   }
 
-      double lowest;
-      if(InpStopLookbackBars <= 0 || !GetLowestLow(InpStopLookbackBars, lowest))
+   double required = PipsToDouble(InpMinRoomPips);
+
+   // policz ekstremum w trendzie (do ROOM i pod TP dynamiczne)
+   double roomExtreme = 0.0;
+   if(wantBuy)
+   {
+      double highest;
+      if(!GetHighestHigh(roomBarsUsed, highest))
       {
-         PrintFormat("SKIP BUY: nie moge wyliczyc LOW z %d swiec (SL dynamiczny)", InpStopLookbackBars);
+         PrintFormat("SKIP BUY: nie moge wyliczyc highest high z %d swiec (trend room)", roomBarsUsed);
+         return;
+      }
+      roomExtreme = highest;
+
+      double room = roomExtreme - ask;
+      double roomPips = room / PipSize(Symbol());
+
+      if(room < required)
+      {
+         PrintFormat("SKIP BUY: za malo miejsca do szczytu (trend). ustawione=%d, uzyte=%d, Room=%.1f pips, wymagane=%.1f",
+                     InpRoomLookbackBars, roomBarsUsed, roomPips, InpMinRoomPips);
+         return;
+      }
+   }
+   else
+   {
+      double lowest;
+      if(!GetLowestLow(roomBarsUsed, lowest))
+      {
+         PrintFormat("SKIP SELL: nie moge wyliczyc lowest low z %d swiec (trend room)", roomBarsUsed);
+         return;
+      }
+      roomExtreme = lowest;
+
+      double room = bid - roomExtreme;
+      double roomPips = room / PipSize(Symbol());
+
+      if(room < required)
+      {
+         PrintFormat("SKIP SELL: za malo miejsca do dolka (trend). ustawione=%d, uzyte=%d, Room=%.1f pips, wymagane=%.1f",
+                     InpRoomLookbackBars, roomBarsUsed, roomPips, InpMinRoomPips);
+         return;
+      }
+   }
+
+   // --- 2) SL: tylko w ramach aktualnego trendu (maks. InpStopLookbackBars) ---
+   int slBarsUsed = GetTrendRunBars(wantBuy, InpStopLookbackBars);
+   if(slBarsUsed < 1)
+   {
+      PrintFormat("SKIP %s: brak swiec w aktualnym trendzie (SL). ustawione=%d, uzyte=%d",
+                  (wantBuy ? "BUY" : "SELL"), InpStopLookbackBars, slBarsUsed);
+      return;
+   }
+
+   double slBuffer = PipsToDouble(InpSLBufferPips);
+   double sl = 0.0;
+
+   if(wantBuy)
+   {
+      double lowest;
+      if(!GetLowestLow(slBarsUsed, lowest))
+      {
+         PrintFormat("SKIP BUY: nie moge wyliczyc LOW z %d swiec (trend SL)", slBarsUsed);
          return;
       }
       sl = lowest - slBuffer;
@@ -497,14 +576,12 @@ void OpenTrade( ENUM_ORDER_TYPE type )
       double maxAllowed = bid - minStopDist;
       if(minStopDist > 0 && sl > maxAllowed) sl = maxAllowed;
    }
-   else // SELL
+   else
    {
-      price = bid;
-
       double highest;
-      if(InpStopLookbackBars <= 0 || !GetHighestHigh(InpStopLookbackBars, highest))
+      if(!GetHighestHigh(slBarsUsed, highest))
       {
-         PrintFormat("SKIP SELL: nie moge wyliczyc HIGH z %d swiec (SL dynamiczny)", InpStopLookbackBars);
+         PrintFormat("SKIP SELL: nie moge wyliczyc HIGH z %d swiec (trend SL)", slBarsUsed);
          return;
       }
       sl = highest + slBuffer;
@@ -516,21 +593,20 @@ void OpenTrade( ENUM_ORDER_TYPE type )
 
    // --- LIMIT MAKSYMALNEGO SL (W PIPSACH) ---
    double slDistPips = 0.0;
-   if(type == ORDER_TYPE_BUY)
-      slDistPips = (price - sl) / PipSize(Symbol());
-   else
-      slDistPips = (sl - price) / PipSize(Symbol());
+   if(wantBuy) slDistPips = (price - sl) / PipSize(Symbol());
+   else        slDistPips = (sl - price) / PipSize(Symbol());
 
    if(slDistPips > InpMaxSLPips)
    {
-      PrintFormat("SKIP %s: SL za duzy (%.1f pips) > limit (%.1f pips). price=%.5f sl=%.5f",
-                  (type==ORDER_TYPE_BUY ? "BUY" : "SELL"),
-                  slDistPips, InpMaxSLPips, price, sl);
+      PrintFormat("SKIP %s: SL za duzy (%.1f pips) > limit (%.1f pips). price=%.5f sl=%.5f | SL ustawione=%d uzyte=%d",
+                  (wantBuy ? "BUY" : "SELL"),
+                  slDistPips, InpMaxSLPips, price, sl,
+                  InpStopLookbackBars, slBarsUsed);
       return;
    }
 
-   // --- TP (STAŁY / DYNAMICZNY / OFF) ---
-   tp = 0.0;
+   // --- 3) TP: OFF / FIXED / DYNAMIC (z tego samego ekstremum co ROOM i trend-limited) ---
+   double tp = 0.0;
 
    if(InpTPMode == TP_MODE_OFF)
    {
@@ -540,50 +616,86 @@ void OpenTrade( ENUM_ORDER_TYPE type )
    {
       if(InpTakeProfitPips > 0)
       {
-         if(type == ORDER_TYPE_BUY)  tp = price + TakeProfit;
-         if(type == ORDER_TYPE_SELL) tp = price - TakeProfit;
+         if(wantBuy) tp = price + TakeProfit;
+         else        tp = price - TakeProfit;
       }
       else tp = 0.0;
    }
    else if(InpTPMode == TP_MODE_DYNAMIC_EXTREME)
    {
-      double tpDyn;
-      if(!GetDynamicTPPrice(type, price, tpDyn))
+      double tpBuffer = PipsToDouble(InpTPBufferPips);
+
+      if(wantBuy)
       {
-         PrintFormat("SKIP %s: nie moge wyliczyc dynamicznego TP (lookback=%d, buffer=%.1f pips) albo TP za blisko ceny",
-                     (type==ORDER_TYPE_BUY ? "BUY" : "SELL"),
-                     InpTpLookbackBars, InpTPBufferPips);
-         return;
+         tp = roomExtreme - tpBuffer;
+
+         // musi być powyżej wejścia + stopslevel
+         if(tp <= price + minStopDist)
+         {
+            PrintFormat("SKIP BUY: TP dynamiczny za blisko. TP=%.5f price=%.5f stops=%.5f | roomUsed=%d (ustawione=%d)",
+                        tp, price, minStopDist, roomBarsUsed, InpRoomLookbackBars);
+            return;
+         }
       }
-      tp = tpDyn;
+      else
+      {
+         tp = roomExtreme + tpBuffer;
+
+         // musi być poniżej wejścia - stopslevel
+         if(tp >= price - minStopDist)
+         {
+            PrintFormat("SKIP SELL: TP dynamiczny za blisko. TP=%.5f price=%.5f stops=%.5f | roomUsed=%d (ustawione=%d)",
+                        tp, price, minStopDist, roomBarsUsed, InpRoomLookbackBars);
+            return;
+         }
+      }
    }
 
-   // --- WALIDACJA TP pod brokera (stops level) ---
+   // --- WALIDACJA TP pod brokera (na wszelki wypadek) ---
    if(tp > 0.0 && minStopDist > 0.0)
    {
-      if(type == ORDER_TYPE_BUY)
+      if(wantBuy)
       {
-         // TP dla BUY musi być >= ask + stopslevel
          double minTp = ask + minStopDist;
          if(tp < minTp) tp = minTp;
       }
       else
       {
-         // TP dla SELL musi być <= bid - stopslevel
          double maxTp = bid - minStopDist;
          if(tp > maxTp) tp = maxTp;
       }
    }
+// --- WARUNEK: TP musi być większe niż SL ---
+if(InpRequireTPGreaterThanSL && tp > 0.0)
+{
+   double tpDistPips = 0.0;
+
+   if(wantBuy)
+      tpDistPips = (tp - price) / PipSize(Symbol());   // BUY: TP - cena
+   else
+      tpDistPips = (price - tp) / PipSize(Symbol());   // SELL: cena - TP
+
+   if(tpDistPips <= slDistPips)
+   {
+      PrintFormat("SKIP %s: TP <= SL (TP=%.1f pips, SL=%.1f pips). price=%.5f sl=%.5f tp=%.5f",
+                  (wantBuy ? "BUY" : "SELL"),
+                  tpDistPips, slDistPips,
+                  price, sl, tp);
+      return;
+   }
+}
 
    // --- NORMALIZACJA ---
    price = NormalizeDouble(price, Digits());
    sl    = NormalizeDouble(sl, Digits());
    tp    = (tp == 0.0 ? 0.0 : NormalizeDouble(tp, Digits()));
 
-   PrintFormat("OPEN %s: price=%.5f SL=%.5f (%.1f pips) TP=%.5f | SLlookback=%d TPmode=%d TPlb=%d",
-               (type==ORDER_TYPE_BUY ? "BUY" : "SELL"),
+   PrintFormat("OPEN %s: price=%.5f SL=%.5f (%.1f pips) TP=%.5f | ROOM ustawione=%d uzyte=%d | SL ustawione=%d uzyte=%d | TPmode=%d",
+               (wantBuy ? "BUY" : "SELL"),
                price, sl, slDistPips, tp,
-               InpStopLookbackBars, (int)InpTPMode, InpTpLookbackBars);
+               InpRoomLookbackBars, roomBarsUsed,
+               InpStopLookbackBars, slBarsUsed,
+               (int)InpTPMode);
 
    if(!Trade.PositionOpen(Symbol(), type, InpOrderSize, price, sl, tp, InpTradeComment))
    {
