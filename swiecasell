@@ -1,0 +1,320 @@
+//+------------------------------------------------------------------+
+//| SWIECA_SELL_CLOSE_OR_BUFFER.mq5                                  |
+//+------------------------------------------------------------------+
+#property strict
+
+#include <Trade/Trade.mqh>
+CTrade trade;
+
+input double Lots = 0.1;
+input int SL_Pips = 1000;
+input int TP_Pips = 1500;
+input int MaxCandlesWait = 3;
+input int EntryBufferPips = 1999;   // tylko do wejścia intrabar
+
+// TF sygnalowy (dziala niezaleznie od interwalu wykresu)
+input ENUM_TIMEFRAMES SignalTF = PERIOD_M15;
+
+// ===== BREAK EVEN (SL -> 0 / BE) =====
+input bool EnableBreakEven = true;                 // master
+input int  BE_AfterClosedCandles = 1;              // po ilu zamknietych swiecach TF od otwarcia pozycji
+input bool EnableBreakEvenOnProfit = true;         // dodatkowo: BE po zysku
+input int  BE_ProfitTriggerPips = 50;              // ile "pips" zysku, zeby ustawic BE
+
+// ===== CLOSE on bullish-over-last-bearish =====
+input bool EnableCloseOnBullOverBear = true;
+input int  BearLookbackCandles = 1;
+input bool UseBearHighForClose = true;
+
+input bool enableTimePeriod1 = true;
+input bool enableTimePeriod2 = false;
+
+input int startHour1 = 15;
+input int startMinute1 = 0;
+input int endHour1 = 24;
+input int endMinute1 = 0;
+
+input int startHour2 = 15;
+input int startMinute2 = 0;
+input int endHour2 = 22;
+input int endMinute2 = 0;
+
+bool IsTimeToTrade() {
+   MqlDateTime time;
+   TimeToStruct(TimeCurrent(), time);
+
+   int startTime1 = startHour1 * 60 + startMinute1;
+   int endTime1   = endHour1   * 60 + endMinute1;
+   int startTime2 = startHour2 * 60 + startMinute2;
+   int endTime2   = endHour2   * 60 + endMinute2;
+   int currentTime = time.hour * 60 + time.min;
+
+   bool inTimePeriod1 = (currentTime >= startTime1 && currentTime <= endTime1) && enableTimePeriod1;
+   bool inTimePeriod2 = (currentTime >= startTime2 && currentTime <= endTime2) && enableTimePeriod2;
+
+   return inTimePeriod1 || inTimePeriod2;
+}
+
+datetime lastSignalBar = 0;
+
+// setup SELL
+double rememberedBullLow = 0.0;
+bool   haveBullLow = false;
+int    candlesWaited = 0;
+
+double Pip()
+{
+   if(_Digits == 3 || _Digits == 5) return _Point * 10;
+   return _Point;
+}
+
+bool HasOpenPositionOnSymbol()
+{
+   return PositionSelect(_Symbol);
+}
+
+void ResetSetup()
+{
+   haveBullLow = false;
+   rememberedBullLow = 0.0;
+   candlesWaited = 0;
+}
+
+void StartNewSetup(double low)
+{
+   rememberedBullLow = low;
+   haveBullLow = true;
+   candlesWaited = 0;
+}
+
+// =====================================================
+// BREAK EVEN – wspolna funkcja ustawienia SL na BE
+// =====================================================
+bool TryMoveSLToBE(const string reason)
+{
+   if(!EnableBreakEven) return false;
+   if(!PositionSelect(_Symbol)) return false;
+
+   long posType = PositionGetInteger(POSITION_TYPE);
+   if(posType != POSITION_TYPE_SELL) return false; // EA SELL-only
+
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double beSL  = NormalizeDouble(entry, _Digits);
+
+   double curSL = PositionGetDouble(POSITION_SL);
+   double curTP = PositionGetDouble(POSITION_TP);
+
+   // jesli SL juz jest na BE lub "lepiej" (dla SELL: <= entry), to nic nie rob
+   if(curSL != 0.0 && curSL <= beSL + (_Point * 0.5))
+      return true;
+
+   int stopsLevel  = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   int freezeLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double minDist  = (double)MathMax(stopsLevel, freezeLevel) * _Point;
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   // dla SELL: SL musi byc powyzej ASK o minDist
+   if(beSL - ask < minDist)
+      return false;
+
+   if(trade.PositionModify(_Symbol, beSL, curTP))
+   {
+      PrintFormat("BE OK (%s): SL -> entry %.5f", reason, beSL);
+      return true;
+   }
+
+   PrintFormat("BE modify FAILED (%s). retcode=%d (%s)",
+               reason, trade.ResultRetcode(), trade.ResultRetcodeDescription());
+   return false;
+}
+
+// =====================================================
+// BREAK EVEN – po X zamknietych swiecach TF
+// =====================================================
+void ManageBreakEven_AfterCandles_OnNewBar()
+{
+   if(!EnableBreakEven) return;
+   if(!PositionSelect(_Symbol)) return;
+
+   long posType = PositionGetInteger(POSITION_TYPE);
+   if(posType != POSITION_TYPE_SELL) return;
+
+   datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+
+   int barsClosed = iBarShift(_Symbol, SignalTF, openTime, false);
+   if(barsClosed < 0) return;
+
+   if(barsClosed < BE_AfterClosedCandles) return;
+
+   TryMoveSLToBE("after candles");
+}
+
+// =====================================================
+// BREAK EVEN – dodatkowo gdy zysk >= X pips (na tickach)
+// =====================================================
+void ManageBreakEven_OnProfit_Tick()
+{
+   if(!EnableBreakEven) return;
+   if(!EnableBreakEvenOnProfit) return;
+   if(!PositionSelect(_Symbol)) return;
+
+   long posType = PositionGetInteger(POSITION_TYPE);
+   if(posType != POSITION_TYPE_SELL) return;
+
+   double pip   = Pip();
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double ask   = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   // zysk w "pips" wg Twojego Pip()
+   double profitPips = (entry - ask) / pip;
+
+   if(profitPips >= (double)BE_ProfitTriggerPips)
+      TryMoveSLToBE("profit trigger");
+}
+
+// =====================================================
+// CLOSE – gdy bullish zamknie sie nad ostatnia bearish
+// =====================================================
+void ManageClose_OnNewBar()
+{
+   if(!EnableCloseOnBullOverBear) return;
+   if(!PositionSelect(_Symbol)) return;
+
+   long posType = PositionGetInteger(POSITION_TYPE);
+   if(posType != POSITION_TYPE_SELL) return;
+
+   double o1 = iOpen(_Symbol, SignalTF, 1);
+   double c1 = iClose(_Symbol, SignalTF, 1);
+   if(o1 == 0 || c1 == 0) return;
+
+   bool bullish1 = (c1 > o1);
+   if(!bullish1) return;
+
+   int maxShift = MathMax(2, BearLookbackCandles + 1);
+   int bearShift = -1;
+
+   for(int sh = 2; sh <= maxShift; sh++)
+   {
+      datetime t = iTime(_Symbol, SignalTF, sh);
+      if(t == 0) break;
+
+      double o = iOpen(_Symbol, SignalTF, sh);
+      double c = iClose(_Symbol, SignalTF, sh);
+      if(o == 0 || c == 0) continue;
+
+      if(c < o) { bearShift = sh; break; }
+   }
+
+   if(bearShift == -1) return;
+
+   double refLevel = UseBearHighForClose ? iHigh(_Symbol, SignalTF, bearShift)
+                                        : iOpen(_Symbol, SignalTF, bearShift);
+   if(refLevel == 0.0) return;
+
+   if(c1 > refLevel)
+   {
+      if(!trade.PositionClose(_Symbol))
+      {
+         PrintFormat("CLOSE reversal FAILED. retcode=%d (%s)",
+                     trade.ResultRetcode(), trade.ResultRetcodeDescription());
+      }
+      else
+      {
+         PrintFormat("CLOSE reversal OK: bullish close %.5f > ref %.5f (bearShift=%d, TF=%d)",
+                     c1, refLevel, bearShift, (int)SignalTF);
+      }
+   }
+}
+
+// =========================
+// INTRABAR – szybkie wejście
+// =========================
+void CheckIntrabarBreak()
+{
+   if(!haveBullLow) return;
+   if(HasOpenPositionOnSymbol()) return;
+
+   double pip = Pip();
+   double trigger = rememberedBullLow - EntryBufferPips * pip;
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   if(bid <= trigger)
+   {
+      double sl = bid + SL_Pips * pip;
+      double tp = bid - TP_Pips * pip;
+
+      trade.Sell(Lots, _Symbol, bid, sl, tp, "SELL intrabar buffer");
+      ResetSetup();
+   }
+}
+
+void OnTick()
+{
+   // BE po zysku – sprawdzaj na kazdym ticku (nie czeka na swiece)
+   ManageBreakEven_OnProfit_Tick();
+
+   // nowa swieca TF?
+   datetime barTime = iTime(_Symbol, SignalTF, 0);
+   if(barTime == 0) return;
+
+   bool isNewSignalBar = (barTime != lastSignalBar);
+   if(isNewSignalBar)
+   {
+      lastSignalBar = barTime;
+
+      // 1) najpierw wyjscie (jesli odwrotny sygnal)
+      ManageClose_OnNewBar();
+
+      // 2) potem BE po swiecach (jesli pozycja nadal istnieje)
+      ManageBreakEven_AfterCandles_OnNewBar();
+   }
+
+   // wejscia tylko w godzinach
+   if(!IsTimeToTrade()) return;
+
+   // intrabar (na tickach)
+   CheckIntrabarBreak();
+
+   // logika swiecowa tylko na nowej swiecy TF
+   if(!isNewSignalBar) return;
+
+   if(HasOpenPositionOnSymbol()) return;
+
+   double open1  = iOpen(_Symbol, SignalTF, 1);
+   double close1 = iClose(_Symbol, SignalTF, 1);
+   double low1   = iLow(_Symbol, SignalTF, 1);
+
+   bool bullish = (close1 > open1);
+
+   if(bullish)
+   {
+      StartNewSetup(low1);
+      return;
+   }
+
+   if(haveBullLow)
+   {
+      candlesWaited++;
+
+      if(candlesWaited > MaxCandlesWait)
+      {
+         ResetSetup();
+         return;
+      }
+
+      if(close1 < rememberedBullLow)
+      {
+         double pip = Pip();
+         double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+         double sl = price + SL_Pips * pip;
+         double tp = price - TP_Pips * pip;
+
+         trade.Sell(Lots, _Symbol, price, sl, tp, "SELL candle close");
+         ResetSetup();
+         return;
+      }
+   }
+}
