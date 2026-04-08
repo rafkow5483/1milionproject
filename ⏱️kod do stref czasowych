@@ -1,11 +1,11 @@
 
 input bool enableTimePeriod1 = true; // Domyślnie włączone
-input bool enableTimePeriod2 = true; // Domyślnie włączone
+input bool enableTimePeriod2 = false; // Domyślnie włączone
 
 // Definicja zmiennych input dla czasów startu i końca
-input int startHour1 = 6;
+input int startHour1 = 16;
 input int startMinute1 = 0;
-input int endHour1 = 13;
+input int endHour1 = 17;
 input int endMinute1 = 0;
 
 input int startHour2 = 15;
