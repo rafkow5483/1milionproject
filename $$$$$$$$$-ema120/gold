@@ -1,0 +1,542 @@
+//+------------------------------------------------------------------+
+//| EMA10 Low Breakout + Pullback BUY STOP                           |
+//| Opposite pattern only cancels BUY STOP                            |
+//| Close BUY if price drops below EMA10 by X pips                    |
+//+------------------------------------------------------------------+
+#property strict
+
+#include <Trade/Trade.mqh>
+CTrade trade;
+
+// --- ustawienia
+input double Lots                    = 0.10;
+input int    EmaPeriod                = 10;
+input int    RetracePips              = 20;
+input int    StopLossPips             = 40;
+input int    TakeProfitPips           = 100;
+input int    EntryBufferPips          = 1;
+input int    CloseBelowEmaPips        = 10;     // zamknij BUY, gdy cena spadnie X pips poniżej EMA
+input int    MaxBarsToWaitRetrace     = 50;     // 0 = bez limitu
+input int    MaxBarsToWaitCancelSetup = 50;     // 0 = bez limitu
+input ulong  MagicNumber              = 10010;
+input bool   OnePositionAtTime        = true;
+
+// --- EMA
+int emaHandle;
+datetime lastBarTime = 0;
+
+// --- BUY setup
+bool   waitingForBuyRetrace = false;
+double buyBreakoutHigh      = 0.0;
+int    buyBarsAfterSignal   = 0;
+
+// --- setup anulowania BUY STOP
+bool   cancelSetupActive       = false;
+bool   cancelRetraceDone       = false;
+double cancelBreakoutLow       = 0.0;
+int    cancelBarsAfterSignal   = 0;
+
+//+------------------------------------------------------------------+
+double PipSize()
+{
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+
+   if(digits == 5 || digits == 3)
+      return point * 10.0;
+
+   return point;
+}
+
+//+------------------------------------------------------------------+
+double NormalizePrice(double price)
+{
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   return NormalizeDouble(price, digits);
+}
+
+//+------------------------------------------------------------------+
+bool IsNewBar()
+{
+   datetime currentBarTime = iTime(_Symbol, _Period, 0);
+
+   if(currentBarTime == 0)
+      return false;
+
+   if(currentBarTime != lastBarTime)
+   {
+      lastBarTime = currentBarTime;
+      return true;
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+void ResetBuySetup()
+{
+   waitingForBuyRetrace = false;
+   buyBreakoutHigh = 0.0;
+   buyBarsAfterSignal = 0;
+}
+
+//+------------------------------------------------------------------+
+void ResetCancelSetup()
+{
+   cancelSetupActive = false;
+   cancelRetraceDone = false;
+   cancelBreakoutLow = 0.0;
+   cancelBarsAfterSignal = 0;
+}
+
+//+------------------------------------------------------------------+
+bool HasOpenPosition()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+
+      if(PositionSelectByTicket(ticket))
+      {
+         string symbol = PositionGetString(POSITION_SYMBOL);
+         long magic = PositionGetInteger(POSITION_MAGIC);
+
+         if(symbol == _Symbol && magic == (long)MagicNumber)
+            return true;
+      }
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+bool HasBuyPosition()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+
+      if(PositionSelectByTicket(ticket))
+      {
+         string symbol = PositionGetString(POSITION_SYMBOL);
+         long magic = PositionGetInteger(POSITION_MAGIC);
+         ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+         if(symbol == _Symbol &&
+            magic == (long)MagicNumber &&
+            type == POSITION_TYPE_BUY)
+         {
+            return true;
+         }
+      }
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+bool HasBuyStop()
+{
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+
+      if(ticket > 0)
+      {
+         string symbol = OrderGetString(ORDER_SYMBOL);
+         long magic = OrderGetInteger(ORDER_MAGIC);
+         ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+
+         if(symbol == _Symbol &&
+            magic == (long)MagicNumber &&
+            type == ORDER_TYPE_BUY_STOP)
+         {
+            return true;
+         }
+      }
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+void DeleteBuyStops()
+{
+   trade.SetExpertMagicNumber(MagicNumber);
+
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+
+      if(ticket > 0)
+      {
+         string symbol = OrderGetString(ORDER_SYMBOL);
+         long magic = OrderGetInteger(ORDER_MAGIC);
+         ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+
+         if(symbol == _Symbol &&
+            magic == (long)MagicNumber &&
+            type == ORDER_TYPE_BUY_STOP)
+         {
+            if(trade.OrderDelete(ticket))
+            {
+               Print("Anulowano BUY STOP. Ticket: ", ticket);
+            }
+            else
+            {
+               Print("Błąd anulowania BUY STOP. Ticket: ", ticket,
+                     " Retcode: ", trade.ResultRetcode(),
+                     " Opis: ", trade.ResultRetcodeDescription());
+            }
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+void CloseBuyPositions()
+{
+   trade.SetExpertMagicNumber(MagicNumber);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+
+      if(PositionSelectByTicket(ticket))
+      {
+         string symbol = PositionGetString(POSITION_SYMBOL);
+         long magic = PositionGetInteger(POSITION_MAGIC);
+         ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+         if(symbol == _Symbol &&
+            magic == (long)MagicNumber &&
+            type == POSITION_TYPE_BUY)
+         {
+            if(trade.PositionClose(ticket))
+            {
+               Print("Zamknięto pozycję BUY. Cena spadła poniżej EMA10 o ",
+                     CloseBelowEmaPips,
+                     " pips. Ticket: ",
+                     ticket);
+            }
+            else
+            {
+               Print("Błąd zamykania BUY. Ticket: ",
+                     ticket,
+                     " Retcode: ",
+                     trade.ResultRetcode(),
+                     " Opis: ",
+                     trade.ResultRetcodeDescription());
+            }
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+void CheckCloseBuyBelowEma()
+{
+   // Jeżeli nie ma pozycji BUY, nie sprawdzamy zamykania
+   if(!HasBuyPosition())
+      return;
+
+   double emaNow[];
+   ArraySetAsSeries(emaNow, true);
+
+   if(CopyBuffer(emaHandle, 0, 0, 1, emaNow) < 1)
+      return;
+
+   double pip = PipSize();
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   double closeLevel = emaNow[0] - CloseBelowEmaPips * pip;
+
+   if(bid <= closeLevel)
+   {
+      Print("Warunek zamknięcia BUY spełniony. BID: ",
+            bid,
+            " EMA10: ",
+            emaNow[0],
+            " Poziom zamknięcia: ",
+            closeLevel);
+
+      CloseBuyPositions();
+
+      ResetBuySetup();
+      ResetCancelSetup();
+   }
+}
+
+//+------------------------------------------------------------------+
+void PlaceBuyStop()
+{
+   if(HasBuyStop())
+   {
+      Print("BUY STOP już istnieje. Nie ustawiam kolejnego.");
+      return;
+   }
+
+   double pip   = PipSize();
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double ask   = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   int stopsLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDistance = stopsLevel * point;
+
+   double entry = buyBreakoutHigh + EntryBufferPips * pip;
+
+   if(entry < ask + minDistance)
+      entry = ask + minDistance;
+
+   entry = NormalizePrice(entry);
+
+   double sl = NormalizePrice(entry - StopLossPips * pip);
+   double tp = NormalizePrice(entry + TakeProfitPips * pip);
+
+   trade.SetExpertMagicNumber(MagicNumber);
+
+   bool result = trade.BuyStop(
+      Lots,
+      entry,
+      _Symbol,
+      sl,
+      tp,
+      ORDER_TIME_GTC,
+      0,
+      "EMA10 BUY STOP"
+   );
+
+   if(result)
+   {
+      Print("BUY STOP ustawiony. Entry: ", entry,
+            " SL: ", sl,
+            " TP: ", tp,
+            " High wybicia/ruchu: ", buyBreakoutHigh);
+   }
+   else
+   {
+      Print("Błąd ustawiania BUY STOP. Retcode: ",
+            trade.ResultRetcode(),
+            " Opis: ",
+            trade.ResultRetcodeDescription());
+   }
+}
+
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   emaHandle = iMA(_Symbol, _Period, EmaPeriod, 0, MODE_EMA, PRICE_LOW);
+
+   if(emaHandle == INVALID_HANDLE)
+   {
+      Print("Błąd tworzenia EMA.");
+      return INIT_FAILED;
+   }
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   lastBarTime = iTime(_Symbol, _Period, 0);
+
+   Print("EA uruchomiony. EMA ",
+         EmaPeriod,
+         " liczona z LOW. Zamknięcie BUY poniżej EMA o ",
+         CloseBelowEmaPips,
+         " pips.");
+
+   return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   if(emaHandle != INVALID_HANDLE)
+      IndicatorRelease(emaHandle);
+}
+
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   // To działa na każdym ticku, nie tylko na nowej świecy
+   CheckCloseBuyBelowEma();
+
+   if(!IsNewBar())
+      return;
+
+   if(Bars(_Symbol, _Period) < EmaPeriod + 5)
+      return;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+
+   if(CopyRates(_Symbol, _Period, 0, 5, rates) < 5)
+      return;
+
+   double ema[];
+   ArraySetAsSeries(ema, true);
+
+   if(CopyBuffer(emaHandle, 0, 0, 5, ema) < 5)
+      return;
+
+   double pip = PipSize();
+
+   // ---------------------------------------------------------------
+   // SYGNAŁ BUY:
+   // Cena przebija EMA od dołu do góry
+   // ---------------------------------------------------------------
+   bool buySignal = rates[2].close <= ema[2] &&
+                    rates[1].close > ema[1];
+
+   // ---------------------------------------------------------------
+   // SYGNAŁ ODWROTNY:
+   // Cena przebija EMA od góry w dół.
+   // To NIE otwiera sell. To tylko przygotowuje anulowanie Buy Stop.
+   // ---------------------------------------------------------------
+   bool oppositeSignal = rates[2].close >= ema[2] &&
+                         rates[1].close < ema[1];
+
+   // ---------------------------------------------------------------
+   // Nowy BUY setup
+   // ---------------------------------------------------------------
+   if(buySignal)
+   {
+      if(OnePositionAtTime && HasOpenPosition())
+      {
+         Print("Jest już otwarta pozycja. Pomijam nowy BUY setup.");
+         return;
+      }
+
+      buyBreakoutHigh = rates[1].high;
+      waitingForBuyRetrace = true;
+      buyBarsAfterSignal = 0;
+
+      ResetCancelSetup();
+
+      Print("BUY setup: cena przebiła EMA10 LOW od dołu do góry. Startowy High: ",
+            buyBreakoutHigh,
+            ". Teraz aktualizuję High aż do cofnięcia ",
+            RetracePips,
+            " pips.");
+
+      return;
+   }
+
+   // ---------------------------------------------------------------
+   // Nowy przeciwny setup do anulowania BUY STOP
+   // ---------------------------------------------------------------
+   if(oppositeSignal)
+   {
+      cancelSetupActive = true;
+      cancelRetraceDone = false;
+      cancelBreakoutLow = rates[1].low;
+      cancelBarsAfterSignal = 0;
+
+      ResetBuySetup();
+
+      Print("Setup anulowania BUY STOP: cena przebiła EMA10 LOW od góry w dół. Startowy Low: ",
+            cancelBreakoutLow,
+            ". Czekam na cofnięcie ",
+            RetracePips,
+            " pips w górę, potem wybicie Low.");
+
+      return;
+   }
+
+   // ---------------------------------------------------------------
+   // Obsługa BUY setup:
+   //
+   // Po wybiciu EMA od dołu EA cały czas aktualizuje najwyższy High.
+   // Dopiero cofnięcie 100 pips od NAJWYŻSZEGO High ustawia BUY STOP.
+   // ---------------------------------------------------------------
+   if(waitingForBuyRetrace)
+   {
+      buyBarsAfterSignal++;
+
+      if(rates[1].high > buyBreakoutHigh)
+      {
+         buyBreakoutHigh = rates[1].high;
+
+         Print("BUY setup: nowe najwyższe High po wybiciu EMA: ",
+               buyBreakoutHigh);
+      }
+
+      double buyRetraceLevel = buyBreakoutHigh - RetracePips * pip;
+
+      if(rates[1].low <= buyRetraceLevel)
+      {
+         Print("BUY setup: cena cofnęła minimum ",
+               RetracePips,
+               " pips od najwyższego High. Ustawiam BUY STOP nad High: ",
+               buyBreakoutHigh);
+
+         PlaceBuyStop();
+         ResetBuySetup();
+         return;
+      }
+
+      if(MaxBarsToWaitRetrace > 0 &&
+         buyBarsAfterSignal >= MaxBarsToWaitRetrace)
+      {
+         Print("BUY setup anulowany. Brak cofnięcia w limicie świec.");
+         ResetBuySetup();
+         return;
+      }
+   }
+
+   // ---------------------------------------------------------------
+   // Obsługa setupu anulowania BUY STOP:
+   //
+   // 1. Cena przebija EMA od góry w dół.
+   // 2. EA aktualizuje najniższy Low, dopóki nie było cofnięcia.
+   // 3. Cena cofa minimum 100 pips w górę.
+   // 4. Potem cena wybija ten najniższy Low.
+   // 5. EA anuluje BUY STOP.
+   // ---------------------------------------------------------------
+   if(cancelSetupActive)
+   {
+      cancelBarsAfterSignal++;
+
+      if(!cancelRetraceDone)
+      {
+         if(rates[1].low < cancelBreakoutLow)
+         {
+            cancelBreakoutLow = rates[1].low;
+
+            Print("Setup anulowania: nowe niższe Low po wybiciu EMA w dół: ",
+                  cancelBreakoutLow);
+         }
+
+         double cancelRetraceLevel = cancelBreakoutLow + RetracePips * pip;
+
+         if(rates[1].high >= cancelRetraceLevel)
+         {
+            cancelRetraceDone = true;
+
+            Print("Setup anulowania: cena cofnęła minimum ",
+                  RetracePips,
+                  " pips w górę. Teraz czekam na wybicie Low: ",
+                  cancelBreakoutLow);
+         }
+      }
+      else
+      {
+         if(rates[1].low < cancelBreakoutLow)
+         {
+            Print("Setup anulowania: cena wybiła Low po cofnięciu. Anuluję BUY STOP.");
+
+            DeleteBuyStops();
+            ResetCancelSetup();
+            ResetBuySetup();
+
+            return;
+         }
+      }
+
+      if(MaxBarsToWaitCancelSetup > 0 &&
+         cancelBarsAfterSignal >= MaxBarsToWaitCancelSetup)
+      {
+         Print("Setup anulowania BUY STOP wygasł. Brak pełnego układu.");
+         ResetCancelSetup();
+         return;
+      }
+   }
+}
+//+------------------------------------------------------------------+
