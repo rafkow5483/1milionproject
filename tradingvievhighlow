@@ -3,10 +3,10 @@
 // © LuxAlgo
 // Modified: double pivot pair version without live/repainting last ghost
 // Added: separate ZigZag/Level lines toggles for each pair
-// Added: WMA 80 Close
+// Added: WMA 80 Close + Active SL 0.1%
 
 //@version=5
-indicator("Pivot Points High Low & Missed Reversal Levels x2 - Stable Only + WMA 80", overlay=true, max_labels_count=500, max_lines_count=500, max_bars_back=1000)
+indicator("Pivot Points High Low & Missed Reversal Levels x2 - Stable Only + WMA Active SL", overlay=true, max_labels_count=500, max_lines_count=500, max_bars_back=1000)
 
 //==============================================================================
 // PARA 1 - CZERWONY / ZIELONY
@@ -387,10 +387,10 @@ if not na(pl2)
 
 
 //==============================================================================
-// WMA 80 CLOSE
+// WMA 80 CLOSE + AKTYWNY SL 0.1% OD ŚREDNIEJ
 //==============================================================================
 
-groupWMA = "WMA 80 Close"
+groupWMA = "WMA 80 Close + Active SL"
 
 show_wma80  = input.bool(true, "Show WMA 80", group=groupWMA)
 wma80_len   = input.int(80, "WMA Length", minval=1, group=groupWMA)
@@ -398,6 +398,65 @@ wma80_src   = input.source(close, "WMA Source", group=groupWMA)
 wma80_color = input.color(color.orange, "WMA Color", group=groupWMA)
 wma80_width = input.int(2, "WMA Width", minval=1, maxval=5, group=groupWMA)
 
+show_active_sl_line = input.bool(true, "Show Active SL Line", group=groupWMA)
+show_sl_table       = input.bool(true, "Show SL Table", group=groupWMA)
+
+sl_percent = input.float(0.10, "Distance from WMA (%)", minval=0.0, step=0.01, group=groupWMA)
+
+buy_sl_color  = input.color(color.new(color.lime, 0), "BUY SL Line Color", group=groupWMA)
+sell_sl_color = input.color(color.new(color.red, 0), "SELL SL Line Color", group=groupWMA)
+neutral_color = input.color(color.new(color.gray, 0), "Neutral Color", group=groupWMA)
+
+table_pos_input = input.string("Top Right", "Table Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=groupWMA)
+
+table_pos = table_pos_input == "Top Left" ? position.top_left :
+     table_pos_input == "Bottom Right" ? position.bottom_right :
+     table_pos_input == "Bottom Left" ? position.bottom_left :
+     position.top_right
+
 wma80 = ta.wma(wma80_src, wma80_len)
 
+sl_decimal = sl_percent / 100.0
+
+upper_wma_level = wma80 * (1.0 + sl_decimal)
+lower_wma_level = wma80 * (1.0 - sl_decimal)
+
+price_above_wma_zone = close > upper_wma_level
+price_below_wma_zone = close < lower_wma_level
+
+active_sl = price_above_wma_zone ? lower_wma_level :
+     price_below_wma_zone ? upper_wma_level :
+     na
+
+active_sl_color = price_above_wma_zone ? buy_sl_color :
+     price_below_wma_zone ? sell_sl_color :
+     neutral_color
+
+active_direction = price_above_wma_zone ? "BUY / SL pod WMA" :
+     price_below_wma_zone ? "SELL / SL nad WMA" :
+     "NEUTRAL"
+
 plot(show_wma80 ? wma80 : na, title="WMA 80 Close", color=wma80_color, linewidth=wma80_width)
+
+plot(show_active_sl_line ? active_sl : na, title="Active SL from WMA", color=active_sl_color, linewidth=2)
+
+var table sl_table = table.new(table_pos, 2, 5, border_width=1)
+
+if barstate.islast
+    if show_sl_table
+        table.cell(sl_table, 0, 0, "Poziom", text_color=color.white, bgcolor=color.new(color.black, 0))
+        table.cell(sl_table, 1, 0, "Wartość", text_color=color.white, bgcolor=color.new(color.black, 0))
+
+        table.cell(sl_table, 0, 1, "WMA " + str.tostring(wma80_len), text_color=color.white, bgcolor=color.new(color.black, 70))
+        table.cell(sl_table, 1, 1, str.tostring(wma80, format.mintick), text_color=wma80_color, bgcolor=color.new(color.black, 70))
+
+        table.cell(sl_table, 0, 2, "Kierunek", text_color=color.white, bgcolor=color.new(color.black, 70))
+        table.cell(sl_table, 1, 2, active_direction, text_color=active_sl_color, bgcolor=color.new(color.black, 70))
+
+        table.cell(sl_table, 0, 3, "Aktywny SL", text_color=color.white, bgcolor=color.new(color.black, 70))
+        table.cell(sl_table, 1, 3, na(active_sl) ? "BRAK" : str.tostring(active_sl, format.mintick), text_color=active_sl_color, bgcolor=color.new(color.black, 70))
+
+        table.cell(sl_table, 0, 4, "Odległość", text_color=color.white, bgcolor=color.new(color.black, 70))
+        table.cell(sl_table, 1, 4, str.tostring(sl_percent) + "%", text_color=color.white, bgcolor=color.new(color.black, 70))
+    else
+        table.clear(sl_table, 0, 0, 1, 4)
