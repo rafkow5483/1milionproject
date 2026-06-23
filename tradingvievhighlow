@@ -1,0 +1,385 @@
+// This work is licensed under a Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+// https://creativecommons.org/licenses/by-nc-sa/4.0/
+// © LuxAlgo
+// Modified: double pivot pair version without live/repainting last ghost
+// Added: separate ZigZag/Level lines toggles for each pair
+
+//@version=5
+indicator("Pivot Points High Low & Missed Reversal Levels x2 - Stable Only", overlay=true, max_labels_count=500, max_lines_count=500, max_bars_back=1000)
+
+//==============================================================================
+// PARA 1 - CZERWONY / ZIELONY
+//==============================================================================
+
+group1 = "Para 1 - czerwony / zielony"
+
+length1 = input.int(50, "Pivot Length 1", minval=1, group=group1)
+
+show_reg1   = input.bool(true, "Regular Pivots 1", inline="reg1", group=group1)
+reg_ph_css1 = input.color(#ef5350, "High", inline="reg1", group=group1)
+reg_pl_css1 = input.color(#26a69a, "Low", inline="reg1", group=group1)
+
+show_miss1   = input.bool(true, "Missed Pivots 1", inline="miss1", group=group1)
+miss_ph_css1 = input.color(#ef5350, "High", inline="miss1", group=group1)
+miss_pl_css1 = input.color(#26a69a, "Low", inline="miss1", group=group1)
+
+show_lines1 = input.bool(true, "ZigZag / Level Lines 1", group=group1)
+
+label_css1 = input.color(color.white, "Text Label Color 1", group=group1)
+
+//------------------------------------------------------------------------------
+// ZMIENNE PARA 1
+//------------------------------------------------------------------------------
+
+var line zigzag1 = na
+var line ghost_level1 = na
+
+var float max1 = 0.0
+var float min1 = 0.0
+
+var int max_x11 = 0
+var int min_x11 = 0
+
+var float follow_max1 = 0.0
+var int follow_max_x11 = 0
+
+var float follow_min1 = 0.0
+var int follow_min_x11 = 0
+
+var int os1 = 0
+var float py11 = 0.0
+var int px11 = 0
+
+n = bar_index
+
+ph1 = ta.pivothigh(length1, length1)
+pl1 = ta.pivotlow(length1, length1)
+
+max1 := math.max(high[length1], max1)
+min1 := math.min(low[length1], min1)
+
+follow_max1 := math.max(high[length1], follow_max1)
+follow_min1 := math.min(low[length1], follow_min1)
+
+if max1 > max1[1]
+    max_x11 := n - length1
+    follow_min1 := low[length1]
+
+if min1 < min1[1]
+    min_x11 := n - length1
+    follow_max1 := high[length1]
+
+if follow_min1 < follow_min1[1]
+    follow_min_x11 := n - length1
+
+if follow_max1 > follow_max1[1]
+    follow_max_x11 := n - length1
+
+//------------------------------------------------------------------------------
+// LOGIKA PARA 1
+//------------------------------------------------------------------------------
+
+if show_lines1 and not na(ghost_level1[1])
+    line.set_x2(ghost_level1[1], n)
+
+if not na(ph1)
+    if show_miss1
+        if os1[1] == 1
+            label.new(min_x11, min1, "👻", color=miss_pl_css1, style=label.style_label_up, size=size.small, tooltip=str.tostring(min1, "#.####"))
+
+            if show_lines1
+                zigzag1 := line.new(px11, py11, min_x11, min1, color=miss_ph_css1, style=line.style_dashed)
+
+            px11 := min_x11
+            py11 := min1
+
+            if show_lines1 and not na(ghost_level1[1])
+                line.set_x2(ghost_level1[1], px11)
+
+            if show_lines1
+                ghost_level1 := line.new(px11, py11, px11, py11, color=color.new(reg_pl_css1, 50), width=2)
+
+        else if ph1 < max1
+            label.new(max_x11, max1, "👻", color=miss_ph_css1, style=label.style_label_down, size=size.small, tooltip=str.tostring(max1, "#.####"))
+            label.new(follow_min_x11, follow_min1, "👻", color=miss_pl_css1, style=label.style_label_up, size=size.small, tooltip=str.tostring(min1, "#.####"))
+
+            if show_lines1
+                zigzag1 := line.new(px11, py11, max_x11, max1, color=miss_pl_css1, style=line.style_dashed)
+
+            px11 := max_x11
+            py11 := max1
+
+            if show_lines1 and not na(ghost_level1[1])
+                line.set_x2(ghost_level1[1], px11)
+
+            if show_lines1
+                ghost_level1 := line.new(px11, py11, px11, py11, color=color.new(reg_ph_css1, 50), width=2)
+
+            if show_lines1
+                zigzag1 := line.new(px11, py11, follow_min_x11, follow_min1, color=miss_ph_css1, style=line.style_dashed)
+
+            px11 := follow_min_x11
+            py11 := follow_min1
+
+            if show_lines1 and not na(ghost_level1)
+                line.set_x2(ghost_level1, px11)
+
+            if show_lines1
+                ghost_level1 := line.new(px11, py11, px11, py11, color=color.new(reg_pl_css1, 50), width=2)
+
+    if show_reg1
+        label.new(n - length1, ph1, "▼", textcolor=label_css1, color=reg_ph_css1, style=label.style_label_down, size=size.small, tooltip=str.tostring(ph1, "#.####"))
+
+        if show_lines1
+            zigzag1 := line.new(px11, py11, n - length1, ph1, color=miss_pl_css1, style=ph1 < max1 or os1[1] == 1 ? line.style_dashed : line.style_solid)
+
+    py11 := ph1
+    px11 := n - length1
+    os1 := 1
+    max1 := ph1
+    min1 := ph1
+
+if not na(pl1)
+    if show_miss1
+        if os1[1] == 0
+            label.new(max_x11, max1, "👻", color=miss_ph_css1, style=label.style_label_down, size=size.small, tooltip=str.tostring(max1, "#.####"))
+
+            if show_lines1
+                zigzag1 := line.new(px11, py11, max_x11, max1, color=miss_pl_css1, style=line.style_dashed)
+
+            px11 := max_x11
+            py11 := max1
+
+            if show_lines1 and not na(ghost_level1[1])
+                line.set_x2(ghost_level1[1], px11)
+
+            if show_lines1
+                ghost_level1 := line.new(px11, py11, px11, py11, color=color.new(reg_ph_css1, 50), width=2)
+
+        else if pl1 > min1
+            label.new(follow_max_x11, follow_max1, "👻", color=miss_ph_css1, style=label.style_label_down, size=size.small, tooltip=str.tostring(max1, "#.####"))
+            label.new(min_x11, min1, "👻", color=miss_pl_css1, style=label.style_label_up, size=size.small, tooltip=str.tostring(min1, "#.####"))
+
+            if show_lines1
+                zigzag1 := line.new(px11, py11, min_x11, min1, color=miss_ph_css1, style=line.style_dashed)
+
+            px11 := min_x11
+            py11 := min1
+
+            if show_lines1 and not na(ghost_level1[1])
+                line.set_x2(ghost_level1[1], px11)
+
+            if show_lines1
+                ghost_level1 := line.new(px11, py11, px11, py11, color=color.new(reg_pl_css1, 50), width=2)
+
+            if show_lines1
+                zigzag1 := line.new(px11, py11, follow_max_x11, follow_max1, color=miss_pl_css1, style=line.style_dashed)
+
+            px11 := follow_max_x11
+            py11 := follow_max1
+
+            if show_lines1 and not na(ghost_level1)
+                line.set_x2(ghost_level1, px11)
+
+            if show_lines1
+                ghost_level1 := line.new(px11, py11, px11, py11, color=color.new(reg_ph_css1, 50), width=2)
+
+    if show_reg1
+        label.new(n - length1, pl1, "▲", textcolor=label_css1, color=reg_pl_css1, style=label.style_label_up, size=size.small, tooltip=str.tostring(pl1, "#.####"))
+
+        if show_lines1
+            zigzag1 := line.new(px11, py11, n - length1, pl1, color=miss_ph_css1, style=pl1 > min1 or os1[1] == 0 ? line.style_dashed : line.style_solid)
+
+    py11 := pl1
+    px11 := n - length1
+    os1 := 0
+    max1 := pl1
+    min1 := pl1
+
+
+//==============================================================================
+// PARA 2 - NIEBIESKI / BIAŁY
+//==============================================================================
+
+group2 = "Para 2 - niebieski / biały"
+
+length2 = input.int(100, "Pivot Length 2", minval=1, group=group2)
+
+show_reg2   = input.bool(true, "Regular Pivots 2", inline="reg2", group=group2)
+reg_ph_css2 = input.color(color.blue, "High", inline="reg2", group=group2)
+reg_pl_css2 = input.color(color.white, "Low", inline="reg2", group=group2)
+
+show_miss2   = input.bool(true, "Missed Pivots 2", inline="miss2", group=group2)
+miss_ph_css2 = input.color(color.blue, "High", inline="miss2", group=group2)
+miss_pl_css2 = input.color(color.white, "Low", inline="miss2", group=group2)
+
+show_lines2 = input.bool(true, "ZigZag / Level Lines 2", group=group2)
+
+label_css2 = input.color(color.black, "Text Label Color 2", group=group2)
+
+//------------------------------------------------------------------------------
+// ZMIENNE PARA 2
+//------------------------------------------------------------------------------
+
+var line zigzag2 = na
+var line ghost_level2 = na
+
+var float max2 = 0.0
+var float min2 = 0.0
+
+var int max_x12 = 0
+var int min_x12 = 0
+
+var float follow_max2 = 0.0
+var int follow_max_x12 = 0
+
+var float follow_min2 = 0.0
+var int follow_min_x12 = 0
+
+var int os2 = 0
+var float py12 = 0.0
+var int px12 = 0
+
+ph2 = ta.pivothigh(length2, length2)
+pl2 = ta.pivotlow(length2, length2)
+
+max2 := math.max(high[length2], max2)
+min2 := math.min(low[length2], min2)
+
+follow_max2 := math.max(high[length2], follow_max2)
+follow_min2 := math.min(low[length2], follow_min2)
+
+if max2 > max2[1]
+    max_x12 := n - length2
+    follow_min2 := low[length2]
+
+if min2 < min2[1]
+    min_x12 := n - length2
+    follow_max2 := high[length2]
+
+if follow_min2 < follow_min2[1]
+    follow_min_x12 := n - length2
+
+if follow_max2 > follow_max2[1]
+    follow_max_x12 := n - length2
+
+//------------------------------------------------------------------------------
+// LOGIKA PARA 2
+//------------------------------------------------------------------------------
+
+if show_lines2 and not na(ghost_level2[1])
+    line.set_x2(ghost_level2[1], n)
+
+if not na(ph2)
+    if show_miss2
+        if os2[1] == 1
+            label.new(min_x12, min2, "👻", color=miss_pl_css2, style=label.style_label_up, size=size.small, tooltip=str.tostring(min2, "#.####"))
+
+            if show_lines2
+                zigzag2 := line.new(px12, py12, min_x12, min2, color=miss_ph_css2, style=line.style_dashed)
+
+            px12 := min_x12
+            py12 := min2
+
+            if show_lines2 and not na(ghost_level2[1])
+                line.set_x2(ghost_level2[1], px12)
+
+            if show_lines2
+                ghost_level2 := line.new(px12, py12, px12, py12, color=color.new(reg_pl_css2, 50), width=2)
+
+        else if ph2 < max2
+            label.new(max_x12, max2, "👻", color=miss_ph_css2, style=label.style_label_down, size=size.small, tooltip=str.tostring(max2, "#.####"))
+            label.new(follow_min_x12, follow_min2, "👻", color=miss_pl_css2, style=label.style_label_up, size=size.small, tooltip=str.tostring(min2, "#.####"))
+
+            if show_lines2
+                zigzag2 := line.new(px12, py12, max_x12, max2, color=miss_pl_css2, style=line.style_dashed)
+
+            px12 := max_x12
+            py12 := max2
+
+            if show_lines2 and not na(ghost_level2[1])
+                line.set_x2(ghost_level2[1], px12)
+
+            if show_lines2
+                ghost_level2 := line.new(px12, py12, px12, py12, color=color.new(reg_ph_css2, 50), width=2)
+
+            if show_lines2
+                zigzag2 := line.new(px12, py12, follow_min_x12, follow_min2, color=miss_ph_css2, style=line.style_dashed)
+
+            px12 := follow_min_x12
+            py12 := follow_min2
+
+            if show_lines2 and not na(ghost_level2)
+                line.set_x2(ghost_level2, px12)
+
+            if show_lines2
+                ghost_level2 := line.new(px12, py12, px12, py12, color=color.new(reg_pl_css2, 50), width=2)
+
+    if show_reg2
+        label.new(n - length2, ph2, "▼", textcolor=label_css2, color=reg_ph_css2, style=label.style_label_down, size=size.small, tooltip=str.tostring(ph2, "#.####"))
+
+        if show_lines2
+            zigzag2 := line.new(px12, py12, n - length2, ph2, color=miss_pl_css2, style=ph2 < max2 or os2[1] == 1 ? line.style_dashed : line.style_solid)
+
+    py12 := ph2
+    px12 := n - length2
+    os2 := 1
+    max2 := ph2
+    min2 := ph2
+
+if not na(pl2)
+    if show_miss2
+        if os2[1] == 0
+            label.new(max_x12, max2, "👻", color=miss_ph_css2, style=label.style_label_down, size=size.small, tooltip=str.tostring(max2, "#.####"))
+
+            if show_lines2
+                zigzag2 := line.new(px12, py12, max_x12, max2, color=miss_pl_css2, style=line.style_dashed)
+
+            px12 := max_x12
+            py12 := max2
+
+            if show_lines2 and not na(ghost_level2[1])
+                line.set_x2(ghost_level2[1], px12)
+
+            if show_lines2
+                ghost_level2 := line.new(px12, py12, px12, py12, color=color.new(reg_ph_css2, 50), width=2)
+
+        else if pl2 > min2
+            label.new(follow_max_x12, follow_max2, "👻", color=miss_ph_css2, style=label.style_label_down, size=size.small, tooltip=str.tostring(max2, "#.####"))
+            label.new(min_x12, min2, "👻", color=miss_pl_css2, style=label.style_label_up, size=size.small, tooltip=str.tostring(min2, "#.####"))
+
+            if show_lines2
+                zigzag2 := line.new(px12, py12, min_x12, min2, color=miss_ph_css2, style=line.style_dashed)
+
+            px12 := min_x12
+            py12 := min2
+
+            if show_lines2 and not na(ghost_level2[1])
+                line.set_x2(ghost_level2[1], px12)
+
+            if show_lines2
+                ghost_level2 := line.new(px12, py12, px12, py12, color=color.new(reg_pl_css2, 50), width=2)
+
+            if show_lines2
+                zigzag2 := line.new(px12, py12, follow_max_x12, follow_max2, color=miss_pl_css2, style=line.style_dashed)
+
+            px12 := follow_max_x12
+            py12 := follow_max2
+
+            if show_lines2 and not na(ghost_level2)
+                line.set_x2(ghost_level2, px12)
+
+            if show_lines2
+                ghost_level2 := line.new(px12, py12, px12, py12, color=color.new(reg_ph_css2, 50), width=2)
+
+    if show_reg2
+        label.new(n - length2, pl2, "▲", textcolor=label_css2, color=reg_pl_css2, style=label.style_label_up, size=size.small, tooltip=str.tostring(pl2, "#.####"))
+
+        if show_lines2
+            zigzag2 := line.new(px12, py12, n - length2, pl2, color=miss_ph_css2, style=pl2 > min2 or os2[1] == 0 ? line.style_dashed : line.style_solid)
+
+    py12 := pl2
+    px12 := n - length2
+    os2 := 0
+    max2 := pl2
+    min2 := pl2
