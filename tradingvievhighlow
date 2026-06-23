@@ -3,9 +3,10 @@
 // © LuxAlgo
 // Modified: double pivot pair version without live/repainting last ghost
 // Added: separate ZigZag/Level lines toggles for each pair
+// Added: WMA 80 Close
 
 //@version=5
-indicator("Pivot Points High Low & Missed Reversal Levels x2 - Stable Only", overlay=true, max_labels_count=500, max_lines_count=500, max_bars_back=1000)
+indicator("Pivot Points High Low & Missed Reversal Levels x2 - Stable Only + WMA 80", overlay=true, max_labels_count=500, max_lines_count=500, max_bars_back=1000)
 
 //==============================================================================
 // PARA 1 - CZERWONY / ZIELONY
@@ -383,3 +384,20 @@ if not na(pl2)
     os2 := 0
     max2 := pl2
     min2 := pl2
+
+
+//==============================================================================
+// WMA 80 CLOSE
+//==============================================================================
+
+groupWMA = "WMA 80 Close"
+
+show_wma80  = input.bool(true, "Show WMA 80", group=groupWMA)
+wma80_len   = input.int(80, "WMA Length", minval=1, group=groupWMA)
+wma80_src   = input.source(close, "WMA Source", group=groupWMA)
+wma80_color = input.color(color.orange, "WMA Color", group=groupWMA)
+wma80_width = input.int(2, "WMA Width", minval=1, maxval=5, group=groupWMA)
+
+wma80 = ta.wma(wma80_src, wma80_len)
+
+plot(show_wma80 ? wma80 : na, title="WMA 80 Close", color=wma80_color, linewidth=wma80_width)
