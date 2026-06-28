@@ -1,0 +1,558 @@
+using System.Collections;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+using UnityEngine.UI;
+using TMPro;
+
+public class RocketShopManager : MonoBehaviour
+{
+    [Header("Rocket Preview")]
+    public Transform previewPoint;
+    public GameObject[] rocketPrefabs;
+
+    [Header("Rocket Data")]
+    public string[] rocketNames;
+    public int[] rocketPrices;
+
+    [Header("UI")]
+    public TMP_Text coinsText;
+    public TMP_Text rocketNameText;
+    public Button buySelectButton;
+    public TMP_Text buySelectButtonText;
+
+    [Header("Reward Ad Button")]
+    public Button rewardAdButton;
+    public int adRewardCoins = 100;
+
+    [Header("Reward Animation")]
+    public Canvas canvas;
+    public RectTransform rewardStartPoint;
+    public RectTransform coinsTarget;
+    public GameObject flyingCoinPrefab;
+
+    [Header("Reward Animation Settings")]
+    public int flyingCoinsCount = 10;
+    public float flyTime = 0.7f;
+    public float spread = 120f;
+    public float coinCounterAnimationTime = 0.8f;
+
+    [Header("Scene")]
+    public string mainMenuSceneName = "MainMenu";
+
+    [Header("Preview Settings")]
+    public float previewRotationSpeed = 30f;
+    public float previewScale = 1f;
+
+    [Header("Select Animation")]
+    public float selectedPulseScale = 1.18f;
+    public float selectedPulseTime = 0.15f;
+
+    private GameObject currentPreviewRocket;
+    private int currentIndex = 0;
+    private int totalCoins = 0;
+
+    private bool rewardAnimating = false;
+    private Coroutine coinTextCoroutine;
+    private Coroutine selectPulseCoroutine;
+
+    private const string TotalCoinsKey = "TotalCoins";
+    private const string SelectedRocketKey = "SelectedRocketIndex";
+    private const string OwnedRocketKey = "RocketOwned_";
+
+    void Start()
+    {
+        // Pierwsza rakieta zawsze odblokowana
+        PlayerPrefs.SetInt(OwnedRocketKey + 0, 1);
+
+        totalCoins = PlayerPrefs.GetInt(TotalCoinsKey, 0);
+        currentIndex = PlayerPrefs.GetInt(SelectedRocketKey, 0);
+
+        if (currentIndex < 0)
+            currentIndex = 0;
+
+        if (rocketPrefabs == null || rocketPrefabs.Length == 0)
+        {
+            Debug.LogError("RocketShopManager: Nie podpięto Rocket Prefabs!");
+            return;
+        }
+
+        if (currentIndex >= rocketPrefabs.Length)
+            currentIndex = 0;
+
+        ShowRocket();
+        UpdateUI();
+    }
+
+    void Update()
+    {
+        if (currentPreviewRocket != null)
+        {
+            currentPreviewRocket.transform.Rotate(
+                0f,
+                previewRotationSpeed * Time.deltaTime,
+                0f,
+                Space.World
+            );
+        }
+    }
+
+    public void NextRocket()
+    {
+        if (rocketPrefabs == null || rocketPrefabs.Length == 0)
+            return;
+
+        currentIndex++;
+
+        if (currentIndex >= rocketPrefabs.Length)
+            currentIndex = 0;
+
+        ShowRocket();
+        UpdateUI();
+    }
+
+    public void PreviousRocket()
+    {
+        if (rocketPrefabs == null || rocketPrefabs.Length == 0)
+            return;
+
+        currentIndex--;
+
+        if (currentIndex < 0)
+            currentIndex = rocketPrefabs.Length - 1;
+
+        ShowRocket();
+        UpdateUI();
+    }
+
+    void ShowRocket()
+    {
+        if (currentPreviewRocket != null)
+            Destroy(currentPreviewRocket);
+
+        if (previewPoint == null)
+        {
+            Debug.LogError("RocketShopManager: Nie podpięto Preview Point!");
+            return;
+        }
+
+        if (rocketPrefabs == null || rocketPrefabs.Length == 0)
+        {
+            Debug.LogError("RocketShopManager: Nie podpięto Rocket Prefabs!");
+            return;
+        }
+
+        if (currentIndex < 0 || currentIndex >= rocketPrefabs.Length)
+            currentIndex = 0;
+
+        if (rocketPrefabs[currentIndex] == null)
+        {
+            Debug.LogError("RocketShopManager: Element " + currentIndex + " w Rocket Prefabs jest pusty!");
+            return;
+        }
+
+        currentPreviewRocket = Instantiate(
+            rocketPrefabs[currentIndex],
+            previewPoint.position,
+            previewPoint.rotation,
+            previewPoint
+        );
+
+        currentPreviewRocket.SetActive(true);
+
+        currentPreviewRocket.transform.localPosition = Vector3.zero;
+        currentPreviewRocket.transform.localRotation = Quaternion.identity;
+        currentPreviewRocket.transform.localScale = Vector3.one * previewScale;
+
+        ForcePreviewVisible(currentPreviewRocket);
+        DisablePreviewPhysics(currentPreviewRocket);
+        CenterPreviewRocket(currentPreviewRocket);
+
+        Debug.Log("Sklep pokazuje rakietę index: " + currentIndex);
+    }
+
+    void ForcePreviewVisible(GameObject rocket)
+    {
+        Transform[] children = rocket.GetComponentsInChildren<Transform>(true);
+
+        foreach (Transform child in children)
+        {
+            child.gameObject.SetActive(true);
+        }
+
+        Renderer[] renderers = rocket.GetComponentsInChildren<Renderer>(true);
+
+        foreach (Renderer renderer in renderers)
+        {
+            renderer.enabled = true;
+        }
+    }
+
+    void DisablePreviewPhysics(GameObject rocket)
+    {
+        Rigidbody[] rigidbodies = rocket.GetComponentsInChildren<Rigidbody>(true);
+
+        foreach (Rigidbody rb in rigidbodies)
+        {
+            rb.isKinematic = true;
+            rb.useGravity = false;
+        }
+
+        Collider[] colliders = rocket.GetComponentsInChildren<Collider>(true);
+
+        foreach (Collider col in colliders)
+        {
+            col.enabled = false;
+        }
+
+        RocketLaunchController[] controllers = rocket.GetComponentsInChildren<RocketLaunchController>(true);
+
+        foreach (RocketLaunchController controller in controllers)
+        {
+            controller.enabled = false;
+        }
+    }
+
+    void CenterPreviewRocket(GameObject rocket)
+    {
+        Renderer[] renderers = rocket.GetComponentsInChildren<Renderer>(true);
+
+        if (renderers.Length == 0)
+            return;
+
+        Bounds bounds = renderers[0].bounds;
+
+        for (int i = 1; i < renderers.Length; i++)
+        {
+            bounds.Encapsulate(renderers[i].bounds);
+        }
+
+        Vector3 worldCenter = bounds.center;
+        Vector3 offset = previewPoint.position - worldCenter;
+
+        rocket.transform.position += offset;
+    }
+
+    void UpdateUI()
+    {
+        totalCoins = PlayerPrefs.GetInt(TotalCoinsKey, 0);
+
+        SetCoinsText(totalCoins);
+
+        if (rocketNameText != null)
+        {
+            if (rocketNames != null && currentIndex < rocketNames.Length)
+                rocketNameText.text = rocketNames[currentIndex];
+            else
+                rocketNameText.text = "ROCKET " + (currentIndex + 1);
+        }
+
+        UpdateButton();
+    }
+
+    void UpdateButton()
+    {
+        if (buySelectButton == null || buySelectButtonText == null)
+            return;
+
+        int selectedRocket = PlayerPrefs.GetInt(SelectedRocketKey, 0);
+        bool owned = IsRocketOwned(currentIndex);
+        int price = GetRocketPrice(currentIndex);
+
+        if (selectedRocket == currentIndex)
+        {
+            buySelectButtonText.text = "WYBRANA";
+            buySelectButton.interactable = false;
+            return;
+        }
+
+        if (owned)
+        {
+            buySelectButtonText.text = "WYBIERZ";
+            buySelectButton.interactable = true;
+            return;
+        }
+
+        buySelectButtonText.text = "KUP: " + price;
+        buySelectButton.interactable = totalCoins >= price;
+    }
+
+    public void BuyOrSelectRocket()
+    {
+        bool owned = IsRocketOwned(currentIndex);
+        int selectedRocket = PlayerPrefs.GetInt(SelectedRocketKey, 0);
+
+        if (selectedRocket == currentIndex)
+            return;
+
+        if (owned)
+        {
+            SelectRocket();
+            return;
+        }
+
+        BuyRocket();
+    }
+
+    void BuyRocket()
+    {
+        int price = GetRocketPrice(currentIndex);
+        totalCoins = PlayerPrefs.GetInt(TotalCoinsKey, 0);
+
+        if (totalCoins < price)
+        {
+            Debug.Log("Za mało monet.");
+            UpdateUI();
+            return;
+        }
+
+        int oldCoins = totalCoins;
+        int newCoins = totalCoins - price;
+
+        totalCoins = newCoins;
+
+        PlayerPrefs.SetInt(TotalCoinsKey, totalCoins);
+        PlayerPrefs.SetInt(OwnedRocketKey + currentIndex, 1);
+        PlayerPrefs.Save();
+
+        AnimateCoinsText(oldCoins, newCoins);
+
+        Debug.Log("Kupiono rakietę index: " + currentIndex);
+
+        UpdateButton();
+    }
+
+    void SelectRocket()
+    {
+        PlayerPrefs.SetInt(SelectedRocketKey, currentIndex);
+        PlayerPrefs.Save();
+
+        Debug.Log("Wybrano rakietę index: " + currentIndex);
+
+        UpdateUI();
+
+        PlaySelectPulse();
+    }
+
+    bool IsRocketOwned(int index)
+    {
+        if (index == 0)
+            return true;
+
+        return PlayerPrefs.GetInt(OwnedRocketKey + index, 0) == 1;
+    }
+
+    int GetRocketPrice(int index)
+    {
+        if (rocketPrices != null && index < rocketPrices.Length)
+            return rocketPrices[index];
+
+        return 100;
+    }
+
+    public void AddCoinsFromAd()
+    {
+        if (rewardAnimating)
+            return;
+
+        int oldCoins = PlayerPrefs.GetInt(TotalCoinsKey, 0);
+        int newCoins = oldCoins + adRewardCoins;
+
+        totalCoins = newCoins;
+
+        PlayerPrefs.SetInt(TotalCoinsKey, newCoins);
+        PlayerPrefs.Save();
+
+        AnimateCoinsText(oldCoins, newCoins);
+        StartCoroutine(PlayRewardCoinAnimation());
+
+        UpdateButton();
+
+        Debug.Log("Dodano " + adRewardCoins + " coinów za reklamę/test.");
+    }
+
+    IEnumerator PlayRewardCoinAnimation()
+    {
+        rewardAnimating = true;
+
+        if (rewardAdButton != null)
+            rewardAdButton.interactable = false;
+
+        if (rewardStartPoint != null)
+        {
+            Vector3 startScale = rewardStartPoint.localScale;
+
+            rewardStartPoint.localScale = startScale * 1.15f;
+            yield return new WaitForSeconds(0.08f);
+
+            rewardStartPoint.localScale = startScale * 0.95f;
+            yield return new WaitForSeconds(0.08f);
+
+            rewardStartPoint.localScale = startScale;
+        }
+
+        if (flyingCoinPrefab != null && canvas != null && rewardStartPoint != null && coinsTarget != null)
+        {
+            for (int i = 0; i < flyingCoinsCount; i++)
+            {
+                GameObject coin = Instantiate(flyingCoinPrefab, canvas.transform);
+                RectTransform coinRect = coin.GetComponent<RectTransform>();
+
+                if (coinRect != null)
+                {
+                    coinRect.position = rewardStartPoint.position;
+
+                    Vector2 randomOffset = Random.insideUnitCircle * spread;
+                    Vector3 midPoint = rewardStartPoint.position + new Vector3(randomOffset.x, randomOffset.y, 0f);
+
+                    StartCoroutine(FlyCoin(
+                        coinRect,
+                        rewardStartPoint.position,
+                        midPoint,
+                        coinsTarget.position
+                    ));
+                }
+
+                yield return new WaitForSeconds(0.04f);
+            }
+        }
+
+        yield return new WaitForSeconds(flyTime);
+
+        rewardAnimating = false;
+
+        if (rewardAdButton != null)
+            rewardAdButton.interactable = true;
+    }
+
+    IEnumerator FlyCoin(RectTransform coinRect, Vector3 start, Vector3 middle, Vector3 end)
+    {
+        float timer = 0f;
+
+        while (timer < flyTime)
+        {
+            timer += Time.deltaTime;
+
+            float t = timer / flyTime;
+
+            Vector3 a = Vector3.Lerp(start, middle, t);
+            Vector3 b = Vector3.Lerp(middle, end, t);
+
+            coinRect.position = Vector3.Lerp(a, b, t);
+            coinRect.localScale = Vector3.Lerp(Vector3.one, Vector3.one * 0.3f, t);
+
+            yield return null;
+        }
+
+        Destroy(coinRect.gameObject);
+    }
+
+    void AnimateCoinsText(int from, int to)
+    {
+        if (coinTextCoroutine != null)
+            StopCoroutine(coinTextCoroutine);
+
+        coinTextCoroutine = StartCoroutine(AnimateCoinsTextCoroutine(from, to));
+    }
+
+    IEnumerator AnimateCoinsTextCoroutine(int from, int to)
+    {
+        float timer = 0f;
+
+        while (timer < coinCounterAnimationTime)
+        {
+            timer += Time.deltaTime;
+
+            float t = timer / coinCounterAnimationTime;
+            int value = Mathf.RoundToInt(Mathf.Lerp(from, to, t));
+
+            SetCoinsText(value);
+
+            yield return null;
+        }
+
+        SetCoinsText(to);
+        coinTextCoroutine = null;
+    }
+
+    void SetCoinsText(int coins)
+    {
+        if (coinsText != null)
+            coinsText.text = "COINS: " + coins;
+    }
+
+    void PlaySelectPulse()
+    {
+        if (currentPreviewRocket == null)
+            return;
+
+        if (selectPulseCoroutine != null)
+            StopCoroutine(selectPulseCoroutine);
+
+        selectPulseCoroutine = StartCoroutine(SelectPulseCoroutine());
+    }
+
+    IEnumerator SelectPulseCoroutine()
+    {
+        Transform rocketTransform = currentPreviewRocket.transform;
+
+        Vector3 normalScale = Vector3.one * previewScale;
+        Vector3 biggerScale = Vector3.one * previewScale * selectedPulseScale;
+
+        float timer = 0f;
+
+        while (timer < selectedPulseTime)
+        {
+            timer += Time.deltaTime;
+
+            float t = timer / selectedPulseTime;
+            rocketTransform.localScale = Vector3.Lerp(normalScale, biggerScale, t);
+
+            yield return null;
+        }
+
+        timer = 0f;
+
+        while (timer < selectedPulseTime)
+        {
+            timer += Time.deltaTime;
+
+            float t = timer / selectedPulseTime;
+            rocketTransform.localScale = Vector3.Lerp(biggerScale, normalScale, t);
+
+            yield return null;
+        }
+
+        rocketTransform.localScale = normalScale;
+        selectPulseCoroutine = null;
+    }
+
+    public void BackToMenu()
+    {
+        Time.timeScale = 1f;
+        SceneManager.LoadScene(mainMenuSceneName);
+    }
+
+    public void ResetShop()
+    {
+        PlayerPrefs.DeleteKey(SelectedRocketKey);
+
+        if (rocketPrefabs != null)
+        {
+            for (int i = 0; i < rocketPrefabs.Length; i++)
+            {
+                PlayerPrefs.DeleteKey(OwnedRocketKey + i);
+            }
+        }
+
+        PlayerPrefs.SetInt(OwnedRocketKey + 0, 1);
+        PlayerPrefs.SetInt(SelectedRocketKey, 0);
+        PlayerPrefs.Save();
+
+        currentIndex = 0;
+
+        ShowRocket();
+        UpdateUI();
+
+        Debug.Log("Shop zresetowany.");
+    }
+}
