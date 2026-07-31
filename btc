@@ -1,0 +1,920 @@
+/*
+   BuySellEma_WMA80_M15.mq5
+*/
+
+#property copyright "Copyright 2022, Orchard Forex"
+#property link      "https://www.orchardforex.com"
+#property version   "1.02"
+
+
+//==================================================
+// USTAWIENIA ŚREDNICH SYGNAŁOWYCH
+//==================================================
+
+// Szybka średnia
+input int                InpFastMABars         = 10;
+input ENUM_MA_METHOD     InpFastMAMethod       = MODE_EMA;
+input ENUM_APPLIED_PRICE InpFastMAAppliedPrice = PRICE_CLOSE;
+
+
+// Wolna średnia
+input int                InpSlowMABars         = 50;
+input ENUM_MA_METHOD     InpSlowMAMethod       = MODE_EMA;
+input ENUM_APPLIED_PRICE InpSlowMAAppliedPrice = PRICE_CLOSE;
+input int                InpSlowMAShift        = 0;
+
+
+//==================================================
+// FILTR WMA Z M15
+//==================================================
+
+input bool            InpUseWMAFilter          = true;
+input int             InpFilterWMABars         = 80;
+input ENUM_TIMEFRAMES InpFilterTimeframe       = PERIOD_M15;
+
+// Maksymalna odległość ceny od WMA.
+// Przy 100 pipsach lub więcej pozycja zostanie odrzucona.
+input double          InpMaxDistanceFromWMA    = 30000;
+
+
+//==================================================
+// USTAWIENIA POZYCJI
+//==================================================
+
+input double InpOrderSize          = 0.1;
+input double InpTakeProfitPips     = 50000;
+input double InpStopLossPips       = 25000;
+input double InpTrailingStopPips   = 10000;
+
+
+//==================================================
+// MAGIC NUMBER I KOMENTARZ
+//==================================================
+
+input int    InpMagic        = 222222;
+input string InpTradeComment = "MA Cross + WMA80 M15 Filter";
+
+
+//==================================================
+// GODZINY HANDLU
+//==================================================
+
+input bool enableTimePeriod1 = true;
+input bool enableTimePeriod2 = false;
+
+input int startHour1   = 0;
+input int startMinute1 = 1;
+input int endHour1     = 23;
+input int endMinute1   = 59;
+
+input int startHour2   = 15;
+input int startMinute2 = 0;
+input int endHour2     = 22;
+input int endMinute2   = 0;
+
+
+//==================================================
+// ZMIENNE GLOBALNE
+//==================================================
+
+double TakeProfit;
+double StopLoss;
+double TrailingStop;
+
+
+// Uchwyty średnich
+int FastHandle      = INVALID_HANDLE;
+int SlowHandle      = INVALID_HANDLE;
+int FilterWMAHandle = INVALID_HANDLE;
+
+
+// Bufory średnich
+double FastBuffer[];
+double SlowBuffer[];
+double FilterWMABuffer[];
+
+
+//==================================================
+// KLASY HANDLOWE
+//==================================================
+
+#include <Trade/Trade.mqh>
+#include <Trade/PositionInfo.mqh>
+
+CTrade        Trade;
+CPositionInfo Position;
+
+
+//==================================================
+// FUNKCJA SPRAWDZAJĄCA GODZINY HANDLU
+//==================================================
+
+bool IsTimeToTrade()
+{
+   MqlDateTime time;
+   TimeToStruct(TimeCurrent(), time);
+
+   int startTime1 = startHour1 * 60 + startMinute1;
+   int endTime1   = endHour1 * 60 + endMinute1;
+
+   int startTime2 = startHour2 * 60 + startMinute2;
+   int endTime2   = endHour2 * 60 + endMinute2;
+
+   int currentTime = time.hour * 60 + time.min;
+
+   bool inTimePeriod1 =
+      enableTimePeriod1 &&
+      currentTime >= startTime1 &&
+      currentTime <= endTime1;
+
+   bool inTimePeriod2 =
+      enableTimePeriod2 &&
+      currentTime >= startTime2 &&
+      currentTime <= endTime2;
+
+   return inTimePeriod1 || inTimePeriod2;
+}
+
+
+//==================================================
+// KONWERSJA PIPSÓW
+//==================================================
+
+double PipSize()
+{
+   return PipSize(Symbol());
+}
+
+
+double PipSize(string symbol)
+{
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   int digits   = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+
+   if((digits % 2) == 1)
+      return point * 10.0;
+
+   return point;
+}
+
+
+double PipsToDouble(double pips)
+{
+   return pips * PipSize(Symbol());
+}
+
+
+double PipsToDouble(double pips, string symbol)
+{
+   return pips * PipSize(symbol);
+}
+
+
+//==================================================
+// SPRAWDZANIE, CZY RYNEK JEST OTWARTY
+//==================================================
+
+bool IsMarketOpen()
+{
+   return IsMarketOpen(Symbol(), TimeCurrent());
+}
+
+
+bool IsMarketOpen(datetime time)
+{
+   return IsMarketOpen(Symbol(), time);
+}
+
+
+bool IsMarketOpen(string symbol, datetime time)
+{
+   static string   lastSymbol   = "";
+   static bool     isOpen       = false;
+   static datetime sessionStart = 0;
+   static datetime sessionEnd   = 0;
+
+   if(lastSymbol == symbol && sessionEnd > sessionStart)
+   {
+      if(
+         (isOpen && time >= sessionStart && time <= sessionEnd) ||
+         (!isOpen && time > sessionStart && time < sessionEnd)
+      )
+      {
+         return isOpen;
+      }
+   }
+
+   lastSymbol = symbol;
+
+   MqlDateTime mtime;
+   TimeToStruct(time, mtime);
+
+   datetime seconds =
+      mtime.hour * 3600 +
+      mtime.min * 60 +
+      mtime.sec;
+
+   mtime.hour = 0;
+   mtime.min  = 0;
+   mtime.sec  = 0;
+
+   datetime dayStart = StructToTime(mtime);
+   datetime dayEnd   = dayStart + 86400;
+
+   datetime fromTime;
+   datetime toTime;
+
+   sessionStart = dayStart;
+   sessionEnd   = dayEnd;
+
+   for(int session = 0; ; session++)
+   {
+      if(
+         !SymbolInfoSessionTrade(
+            symbol,
+            (ENUM_DAY_OF_WEEK)mtime.day_of_week,
+            session,
+            fromTime,
+            toTime
+         )
+      )
+      {
+         sessionEnd = dayEnd;
+         isOpen     = false;
+
+         return isOpen;
+      }
+
+      if(seconds < fromTime)
+      {
+         sessionEnd = dayStart + fromTime;
+         isOpen     = false;
+
+         return isOpen;
+      }
+
+      if(seconds > toTime)
+      {
+         sessionStart = dayStart + toTime;
+         continue;
+      }
+
+      sessionStart = dayStart + fromTime;
+      sessionEnd   = dayStart + toTime;
+      isOpen       = true;
+
+      return isOpen;
+   }
+
+   return false;
+}
+
+
+//==================================================
+// SPRAWDZANIE NOWEJ ŚWIECY
+//==================================================
+
+bool IsNewBar(bool first_call = false)
+{
+   static bool result = false;
+
+   if(!first_call)
+      return result;
+
+   static datetime previousTime = 0;
+
+   datetime currentTime = iTime(
+      Symbol(),
+      Period(),
+      0
+   );
+
+   result = false;
+
+   if(previousTime != currentTime)
+   {
+      previousTime = currentTime;
+      result       = true;
+   }
+
+   return result;
+}
+
+
+//==================================================
+// SPRAWDZANIE ZEZWOLENIA NA HANDEL
+//==================================================
+
+bool IsTradeAllowed()
+{
+   return
+      (bool)MQLInfoInteger(MQL_TRADE_ALLOWED) &&
+      (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) &&
+      (bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) &&
+      (bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT);
+}
+
+
+//==================================================
+// INICJALIZACJA EA
+//==================================================
+
+int OnInit()
+{
+   TakeProfit = PipsToDouble(InpTakeProfitPips);
+   StopLoss   = PipsToDouble(InpStopLossPips);
+   TrailingStop = PipsToDouble(InpTrailingStopPips);
+
+   Trade.SetExpertMagicNumber(InpMagic);
+
+
+   // Szybka średnia z interwału wykresu
+   FastHandle = iMA(
+      Symbol(),
+      Period(),
+      InpFastMABars,
+      0,
+      InpFastMAMethod,
+      InpFastMAAppliedPrice
+   );
+
+   ArraySetAsSeries(FastBuffer, true);
+
+
+   // Wolna średnia z interwału wykresu
+   SlowHandle = iMA(
+      Symbol(),
+      Period(),
+      InpSlowMABars,
+      0,
+      InpSlowMAMethod,
+      InpSlowMAAppliedPrice
+   );
+
+   ArraySetAsSeries(SlowBuffer, true);
+
+
+   // WMA 80 z M15
+   FilterWMAHandle = iMA(
+      Symbol(),
+      InpFilterTimeframe,
+      InpFilterWMABars,
+      0,
+      MODE_LWMA,
+      PRICE_CLOSE
+   );
+
+   ArraySetAsSeries(FilterWMABuffer, true);
+
+
+   if(
+      FastHandle == INVALID_HANDLE ||
+      SlowHandle == INVALID_HANDLE ||
+      FilterWMAHandle == INVALID_HANDLE
+   )
+   {
+      Print("Błąd tworzenia uchwytów średnich.");
+
+      return INIT_FAILED;
+   }
+
+
+   // Blokada sygnału bezpośrednio po uruchomieniu EA
+   IsNewBar(true);
+
+   return INIT_SUCCEEDED;
+}
+
+
+//==================================================
+// WYŁĄCZENIE EA
+//==================================================
+
+void OnDeinit(const int reason)
+{
+   if(FastHandle != INVALID_HANDLE)
+      IndicatorRelease(FastHandle);
+
+   if(SlowHandle != INVALID_HANDLE)
+      IndicatorRelease(SlowHandle);
+
+   if(FilterWMAHandle != INVALID_HANDLE)
+      IndicatorRelease(FilterWMAHandle);
+}
+
+
+//==================================================
+// GŁÓWNA FUNKCJA EA
+//==================================================
+
+void OnTick()
+{
+   // Czy handel jest dozwolony
+   if(!IsTradeAllowed())
+      return;
+
+
+   // Czy rynek jest otwarty
+   if(!IsMarketOpen())
+      return;
+
+
+   // Trailing stop działa na każdym ticku
+   if(TrailingStop > 0)
+      ApplyTrailingStop();
+
+
+   // Sprawdzenie godzin handlu
+   if(!IsTimeToTrade())
+      return;
+
+
+   // Sygnały tylko po rozpoczęciu nowej świecy
+   if(!IsNewBar(true))
+      return;
+
+
+   //==================================================
+   // POBRANIE ŚREDNICH SYGNAŁOWYCH
+   //==================================================
+
+   if(
+      CopyBuffer(
+         FastHandle,
+         0,
+         0,
+         3,
+         FastBuffer
+      ) < 3
+   )
+   {
+      Print("Brak danych szybkiej średniej.");
+      return;
+   }
+
+
+   if(
+      CopyBuffer(
+         SlowHandle,
+         0,
+         InpSlowMAShift,
+         3,
+         SlowBuffer
+      ) < 3
+   )
+   {
+      Print("Brak danych wolnej średniej.");
+      return;
+   }
+
+
+   //==================================================
+   // SYGNAŁ PRZECIĘCIA ŚREDNICH
+   //==================================================
+
+   bool buyCross =
+      FastBuffer[1] > SlowBuffer[1] &&
+      FastBuffer[2] <= SlowBuffer[2];
+
+
+   bool sellCross =
+      FastBuffer[1] < SlowBuffer[1] &&
+      FastBuffer[2] >= SlowBuffer[2];
+
+
+   // Jeżeli nie ma żadnego sygnału, nie sprawdzamy filtra
+   if(!buyCross && !sellCross)
+      return;
+
+
+   //==================================================
+   // DOMYŚLNIE FILTR PRZECHODZI
+   //==================================================
+
+   bool buyFilterPassed  = true;
+   bool sellFilterPassed = true;
+
+   bool buyDirectionPassed  = true;
+   bool sellDirectionPassed = true;
+
+   bool buyDistancePassed  = true;
+   bool sellDistancePassed = true;
+
+   double buyDistancePips  = 0.0;
+   double sellDistancePips = 0.0;
+
+   double filterWMA = 0.0;
+   double filterClose = 0.0;
+
+
+   //==================================================
+   // FILTR WMA 80 M15
+   //==================================================
+
+   if(InpUseWMAFilter)
+   {
+      if(
+         CopyBuffer(
+            FilterWMAHandle,
+            0,
+            0,
+            2,
+            FilterWMABuffer
+         ) < 2
+      )
+      {
+         Print("Brak danych WMA filtra.");
+         return;
+      }
+
+
+      // WMA z ostatniej zakończonej świecy M15
+      filterWMA = FilterWMABuffer[1];
+
+
+      // Zamknięcie ostatniej zakończonej świecy M15
+      filterClose = iClose(
+         Symbol(),
+         InpFilterTimeframe,
+         1
+      );
+
+
+      if(filterWMA <= 0 || filterClose <= 0)
+      {
+         Print("Nie można pobrać ceny lub WMA filtra.");
+         return;
+      }
+
+
+      // Aktualne ceny w momencie próby wejścia
+      double currentAsk = SymbolInfoDouble(
+         Symbol(),
+         SYMBOL_ASK
+      );
+
+      double currentBid = SymbolInfoDouble(
+         Symbol(),
+         SYMBOL_BID
+      );
+
+
+      if(currentAsk <= 0 || currentBid <= 0)
+      {
+         Print("Nie można pobrać aktualnej ceny ASK lub BID.");
+         return;
+      }
+
+
+      double pipSize = PipSize();
+
+      if(pipSize <= 0)
+      {
+         Print("Nieprawidłowy rozmiar pipsa.");
+         return;
+      }
+
+
+      //==================================================
+      // WARUNEK KIERUNKU
+      //==================================================
+
+      // BUY:
+      // zamknięta świeca M15 musi być nad WMA
+      // oraz aktualna cena ASK musi być nad WMA
+      buyDirectionPassed =
+         filterClose > filterWMA &&
+         currentAsk > filterWMA;
+
+
+      // SELL:
+      // zamknięta świeca M15 musi być pod WMA
+      // oraz aktualna cena BID musi być pod WMA
+      sellDirectionPassed =
+         filterClose < filterWMA &&
+         currentBid < filterWMA;
+
+
+      //==================================================
+      // OBLICZENIE ODLEGŁOŚCI OD WMA
+      //==================================================
+
+      buyDistancePips =
+         (currentAsk - filterWMA) / pipSize;
+
+
+      sellDistancePips =
+         (filterWMA - currentBid) / pipSize;
+
+
+      //==================================================
+      // BLOKADA ODLEGŁOŚCI
+      //==================================================
+
+      // BUY przechodzi tylko poniżej 100 pipsów.
+      // Przy 100 pipsach lub więcej jest odrzucany.
+      buyDistancePassed =
+         buyDistancePips >= 0 &&
+         buyDistancePips < InpMaxDistanceFromWMA;
+
+
+      // SELL przechodzi tylko poniżej 100 pipsów.
+      // Przy 100 pipsach lub więcej jest odrzucany.
+      sellDistancePassed =
+         sellDistancePips >= 0 &&
+         sellDistancePips < InpMaxDistanceFromWMA;
+
+
+      buyFilterPassed =
+         buyDirectionPassed &&
+         buyDistancePassed;
+
+
+      sellFilterPassed =
+         sellDirectionPassed &&
+         sellDistancePassed;
+   }
+
+
+   //==================================================
+   // OTWARCIE BUY
+   //==================================================
+
+   if(buyCross)
+   {
+      if(buyFilterPassed)
+      {
+         OpenTrade(ORDER_TYPE_BUY);
+      }
+      else
+      {
+         if(!buyDirectionPassed)
+         {
+            PrintFormat(
+               "BUY odrzucony: cena nie znajduje się nad WMA. WMA=%.*f, zamknięcie M15=%.*f",
+               Digits(),
+               filterWMA,
+               Digits(),
+               filterClose
+            );
+         }
+         else if(!buyDistancePassed)
+         {
+            PrintFormat(
+               "BUY odrzucony: cena jest %.1f pipsów nad WMA. Maksimum musi być poniżej %.1f pipsów.",
+               buyDistancePips,
+               InpMaxDistanceFromWMA
+            );
+         }
+      }
+   }
+
+
+   //==================================================
+   // OTWARCIE SELL
+   //==================================================
+
+   if(sellCross)
+   {
+      if(sellFilterPassed)
+      {
+         OpenTrade(ORDER_TYPE_SELL);
+      }
+      else
+      {
+         if(!sellDirectionPassed)
+         {
+            PrintFormat(
+               "SELL odrzucony: cena nie znajduje się pod WMA. WMA=%.*f, zamknięcie M15=%.*f",
+               Digits(),
+               filterWMA,
+               Digits(),
+               filterClose
+            );
+         }
+         else if(!sellDistancePassed)
+         {
+            PrintFormat(
+               "SELL odrzucony: cena jest %.1f pipsów pod WMA. Maksimum musi być poniżej %.1f pipsów.",
+               sellDistancePips,
+               InpMaxDistanceFromWMA
+            );
+         }
+      }
+   }
+}
+
+
+//==================================================
+// OTWIERANIE POZYCJI
+//==================================================
+
+void OpenTrade(ENUM_ORDER_TYPE type)
+{
+   double price = 0.0;
+   double sl    = 0.0;
+   double tp    = 0.0;
+
+
+   if(type == ORDER_TYPE_BUY)
+   {
+      price = SymbolInfoDouble(
+         Symbol(),
+         SYMBOL_ASK
+      );
+
+      sl = price - StopLoss;
+      tp = price + TakeProfit;
+   }
+   else if(type == ORDER_TYPE_SELL)
+   {
+      price = SymbolInfoDouble(
+         Symbol(),
+         SYMBOL_BID
+      );
+
+      sl = price + StopLoss;
+      tp = price - TakeProfit;
+   }
+   else
+   {
+      return;
+   }
+
+
+   price = NormalizeDouble(price, Digits());
+   sl    = NormalizeDouble(sl, Digits());
+   tp    = NormalizeDouble(tp, Digits());
+
+
+   // Możliwość wyłączenia SL
+   if(StopLoss == 0)
+      sl = 0;
+
+
+   // Możliwość wyłączenia TP
+   if(TakeProfit == 0)
+      tp = 0;
+
+
+   ResetLastError();
+
+
+   if(
+      !Trade.PositionOpen(
+         Symbol(),
+         type,
+         InpOrderSize,
+         price,
+         sl,
+         tp,
+         InpTradeComment
+      )
+   )
+   {
+      PrintFormat(
+         "Błąd otwarcia pozycji. Typ=%s, cena=%.*f, SL=%.*f, TP=%.*f, retcode=%u, opis=%s",
+         EnumToString(type),
+         Digits(),
+         price,
+         Digits(),
+         sl,
+         Digits(),
+         tp,
+         Trade.ResultRetcode(),
+         Trade.ResultRetcodeDescription()
+      );
+   }
+   else
+   {
+      PrintFormat(
+         "Otwarto pozycję %s. Cena=%.*f, SL=%.*f, TP=%.*f",
+         EnumToString(type),
+         Digits(),
+         price,
+         Digits(),
+         sl,
+         Digits(),
+         tp
+      );
+   }
+}
+
+
+//==================================================
+// TRAILING STOP
+//==================================================
+
+void ApplyTrailingStop()
+{
+   double ask = SymbolInfoDouble(
+      Symbol(),
+      SYMBOL_ASK
+   );
+
+   double bid = SymbolInfoDouble(
+      Symbol(),
+      SYMBOL_BID
+   );
+
+
+   double buyTrailingStopPrice =
+      NormalizeDouble(
+         ask - TrailingStop,
+         Digits()
+      );
+
+
+   double sellTrailingStopPrice =
+      NormalizeDouble(
+         bid + TrailingStop,
+         Digits()
+      );
+
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+
+      if(ticket == 0)
+         continue;
+
+
+      if(!Position.SelectByTicket(ticket))
+         continue;
+
+
+      if(Position.Symbol() != Symbol())
+         continue;
+
+
+      if(Position.Magic() != InpMagic)
+         continue;
+
+
+      //==================================================
+      // TRAILING STOP DLA BUY
+      //==================================================
+
+      if(
+         Position.PositionType() == POSITION_TYPE_BUY &&
+         buyTrailingStopPrice > Position.PriceOpen() &&
+         (
+            Position.StopLoss() == 0 ||
+            buyTrailingStopPrice > Position.StopLoss()
+         )
+      )
+      {
+         ResetLastError();
+
+         if(
+            !Trade.PositionModify(
+               ticket,
+               buyTrailingStopPrice,
+               Position.TakeProfit()
+            )
+         )
+         {
+            PrintFormat(
+               "Błąd trailing stop BUY. Ticket=%I64u, retcode=%u, opis=%s",
+               ticket,
+               Trade.ResultRetcode(),
+               Trade.ResultRetcodeDescription()
+            );
+         }
+      }
+
+
+      //==================================================
+      // TRAILING STOP DLA SELL
+      //==================================================
+
+      if(
+         Position.PositionType() == POSITION_TYPE_SELL &&
+         sellTrailingStopPrice < Position.PriceOpen() &&
+         (
+            Position.StopLoss() == 0 ||
+            sellTrailingStopPrice < Position.StopLoss()
+         )
+      )
+      {
+         ResetLastError();
+
+         if(
+            !Trade.PositionModify(
+               ticket,
+               sellTrailingStopPrice,
+               Position.TakeProfit()
+            )
+         )
+         {
+            PrintFormat(
+               "Błąd trailing stop SELL. Ticket=%I64u, retcode=%u, opis=%s",
+               ticket,
+               Trade.ResultRetcode(),
+               Trade.ResultRetcodeDescription()
+            );
+         }
+      }
+   }
+}
