@@ -33,18 +33,18 @@ input int                InpSlowMABars         = 3;          // Slow MA Bars
 input ENUM_MA_METHOD     InpSlowMAMethod       = MODE_EMA;    // Slow MA Method
 input ENUM_APPLIED_PRICE InpSlowMAAppliedPrice = PRICE_CLOSE; // Slow MA Applied Price
 input int                InpSlowMAShift        = 0;           // Slow MA shift
-input int    InpRoomLookbackBars = 15;   // Ile świec wstecz do HIGH/LOW
-input double InpMinRoomPips      = 300.0; // Minimalny dystans w pipsach do szczytu/dołka
-input double InpMaxSLPips = 500.0; // Maksymalny SL w pipsach (jeśli większy -> nie otwieraj)
+input int    InpRoomLookbackBars = 25;   // Ile świec wstecz do HIGH/LOW
+input double InpMinRoomPips      = 1000.0; // Minimalny dystans w pipsach do szczytu/dołka
+input double InpMaxSLPips = 50000.0; // Maksymalny SL w pipsach (jeśli większy -> nie otwieraj)
 
 //
 //	The basic expert uses fixed take profit, stop loss and order size
 //
-input double             InpOrderSize          = 0.01;  // Order size in lots
-input double             InpTakeProfitPips     = 300.0; // Take profit in pips
-input double             InpStopLossPips       = 300.0; // Stop loss in pips
-input double             InpTrailingStopPips   = 500.0;  // Trailing stop pips
-input int    InpStopLookbackBars = 4;   // SL z ilu świec (HIGH/LOW)
+input double             InpOrderSize          = 1;  // Order size in lots
+input double             InpTakeProfitPips     = 50000.0; // Take profit in pips
+input double             InpStopLossPips       = 25000.0; // Stop loss in pips
+input double             InpTrailingStopPips   = 10000.0;  // Trailing stop pips
+input int    InpStopLookbackBars = 25;   // SL z ilu świec (HIGH/LOW)
 input double InpSLBufferPips      = 0.0; // Bufor pipsów (BUY pod low, SELL nad high)
 
 //
@@ -57,10 +57,10 @@ input bool enableTimePeriod1 = true; // Domyślnie włączone
 input bool enableTimePeriod2 = false; // Domyślnie włączone
 
 // Definicja zmiennych input dla czasów startu i końca
-input int startHour1 = 8;
-input int startMinute1 = 0;
-input int endHour1 = 12;
-input int endMinute1 = 0;
+input int startHour1 = 0;
+input int startMinute1 = 1;
+input int endHour1 = 23;
+input int endMinute1 = 59;
 
 input int startHour2 = 15;
 input int startMinute2 = 0;
