@@ -2,11 +2,6 @@
 #property link      "https://www.orchardforex.com"
 #property version   "1.03"
 
-
-//==================================================
-// ŚREDNIE TRENDOWE
-//==================================================
-
 input int                InpTrendFastMABars         = 28;
 input ENUM_MA_METHOD     InpTrendFastMAMethod       = MODE_EMA;
 input ENUM_APPLIED_PRICE InpTrendFastMAAppliedPrice = PRICE_CLOSE;
@@ -15,40 +10,18 @@ input int                InpTrendSlowMABars         = 200;
 input ENUM_MA_METHOD     InpTrendSlowMAMethod       = MODE_EMA;
 input ENUM_APPLIED_PRICE InpTrendSlowMAAppliedPrice = PRICE_CLOSE;
 
-
-//==================================================
-// BLOKADA RUCHU OD PRZECIĘCIA TRENDU
-//==================================================
-
-// Po osiągnięciu tego ruchu od przecięcia średnich
-// trendowych EA blokuje kolejne wejścia.
-// Reset następuje przy kolejnym przecięciu trendowym.
-
 input bool   InpUseTrendMoveBlock    = true;
 input double InpMaxTrendMovePips     = 50000.0;
 input int    InpTrendCrossSearchBars = 5000;
 
-
-//==================================================
-// LIMIT POZYCJI W JEDNYM TRENDZIE
-//==================================================
-
-// Maksymalna liczba udanych otwarć od ostatniego
-// przecięcia średnich trendowych.
-// 0 = brak limitu.
-
 input int InpMaxPositionsPerTrend = 2;
 
+// Musi być false, aby BUY nie blokował SELL i odwrotnie.
+input bool InpOnlyOneOpenPosition = false;
 
-// Tylko jedna otwarta pozycja tego EA na symbolu.
-// Kolejna może zostać otwarta po zamknięciu poprzedniej.
-
-input bool InpOnlyOneOpenPosition = true;
-
-
-//==================================================
-// ŚREDNIE SYGNAŁOWE
-//==================================================
+// Osobny cooldown dla BUY oraz SELL.
+input bool InpUseDirectionCooldown     = true;
+input int  InpDirectionCooldownMinutes = 70;
 
 input int                InpFastMABars         = 5;
 input ENUM_MA_METHOD     InpFastMAMethod       = MODE_EMA;
@@ -59,75 +32,32 @@ input ENUM_MA_METHOD     InpSlowMAMethod       = MODE_EMA;
 input ENUM_APPLIED_PRICE InpSlowMAAppliedPrice = PRICE_CLOSE;
 input int                InpSlowMAShift        = 0;
 
-
-//==================================================
-// ROOM DO SZCZYTU LUB DOŁKA
-//==================================================
-
 input int    InpRoomLookbackBars = 25;
 input double InpMinRoomPips      = 1000.0;
 
-
-//==================================================
-// STOP LOSS NA ŚREDNIEJ TRENDOWEJ
-//==================================================
-
-// BUY: SL pod wolną średnią trendową.
-// SELL: SL nad wolną średnią trendową.
-
 input double InpSLBufferPips = 0.0;
+input double InpMaxSLPips    = 50000.0;
 
-
-// Jeśli odległość SL od wejścia przekroczy ten limit,
-// pozycja zostanie odrzucona.
-// 0 = brak limitu.
-
-input double InpMaxSLPips = 50000.0;
-
-
-//==================================================
-// USTAWIENIA POZYCJI
-//==================================================
-
-input double InpOrderSize        = 1.0;
-input double InpTakeProfitPips   = 100000.0;
-// Jeśli true, SL otwartej pozycji podąża za wolną średnią trendową.
-// BUY: SL pod średnią.
-// SELL: SL nad średnią.
-// Bufor pobierany jest z InpSLBufferPips.
+input double InpOrderSize      = 1.0;
+input double InpTakeProfitPips = 100000.0;
 
 input bool InpUseMATrailingStop = true;
-
-
-//==================================================
-// MAGIC NUMBER I KOMENTARZ
-//==================================================
 
 input int    InpMagic        = 222222;
 input string InpTradeComment = "MA Cross Trend EA";
 
-
-//==================================================
-// GODZINY HANDLU
-//==================================================
-
 input bool enableTimePeriod1 = true;
 input bool enableTimePeriod2 = false;
 
-input int startHour1   = 0;
-input int startMinute1 = 1;
-input int endHour1     = 23;
-input int endMinute1   = 59;
+input int startHour1    = 0;
+input int startMinute1  = 1;
+input int endHour1      = 23;
+input int endMinute1    = 59;
 
-input int startHour2   = 15;
-input int startMinute2 = 0;
-input int endHour2     = 22;
-input int endMinute2   = 0;
-
-
-//==================================================
-// TRYB TAKE PROFIT
-//==================================================
+input int startHour2    = 15;
+input int startMinute2  = 0;
+input int endHour2      = 22;
+input int endMinute2    = 0;
 
 enum ENUM_TP_MODE
 {
@@ -137,20 +67,8 @@ enum ENUM_TP_MODE
 };
 
 input ENUM_TP_MODE InpTPMode = TP_MODE_FIXED;
-
-// BUY: TP poniżej wcześniejszego HIGH.
-// SELL: TP powyżej wcześniejszego LOW.
-
 input double InpTPBufferPips = 0.0;
-
-// Jeśli true, odległość TP musi być większa od odległości SL.
-
 input bool InpRequireTPGreaterThanSL = true;
-
-
-//==================================================
-// KLASY HANDLOWE
-//==================================================
 
 #include <Trade/Trade.mqh>
 #include <Trade/PositionInfo.mqh>
@@ -158,16 +76,7 @@ input bool InpRequireTPGreaterThanSL = true;
 CTrade        Trade;
 CPositionInfo Position;
 
-
-//==================================================
-// ZMIENNE GLOBALNE
-//==================================================
-
-double TakeProfit   = 0.0;
-
-
-
-// Uchwyty średnich sygnałowych
+double TakeProfit = 0.0;
 
 int FastHandle = INVALID_HANDLE;
 int SlowHandle = INVALID_HANDLE;
@@ -175,19 +84,11 @@ int SlowHandle = INVALID_HANDLE;
 double FastBuffer[];
 double SlowBuffer[];
 
-
-// Uchwyty średnich trendowych
-
 int TrendFastHandle = INVALID_HANDLE;
 int TrendSlowHandle = INVALID_HANDLE;
 
 double TrendFastBuffer[];
 double TrendSlowBuffer[];
-
-
-//==================================================
-// DEKLARACJE FUNKCJI
-//==================================================
 
 double PipSize();
 double PipSize(string symbol);
@@ -233,6 +134,10 @@ bool IsTrendMoveEntryAllowed(
 bool HasOpenPositionForThisEA();
 bool IsSingleOpenPositionAllowed();
 
+bool IsDirectionCooldownAllowed(
+   const ENUM_ORDER_TYPE orderType
+);
+
 int CountEntriesSinceTrendCross(
    const bool wantBuyTrend,
    datetime &crossTime,
@@ -246,14 +151,10 @@ bool IsTrendPositionLimitAllowed(
 void OpenTrade(ENUM_ORDER_TYPE type);
 void ApplyTrailingStop();
 
-
-//==================================================
-// GODZINY HANDLU
-//==================================================
-
 bool IsTimeToTrade()
 {
    MqlDateTime currentDateTime;
+
    TimeToStruct(
       TimeCurrent(),
       currentDateTime
@@ -279,32 +180,23 @@ bool IsTimeToTrade()
       endHour2 * 60 +
       endMinute2;
 
-
    bool inPeriod1 =
       enableTimePeriod1 &&
       currentMinutes >= startTime1 &&
       currentMinutes <= endTime1;
-
 
    bool inPeriod2 =
       enableTimePeriod2 &&
       currentMinutes >= startTime2 &&
       currentMinutes <= endTime2;
 
-
    return inPeriod1 || inPeriod2;
 }
-
-
-//==================================================
-// ROZMIAR PIPSA
-//==================================================
 
 double PipSize()
 {
    return PipSize(Symbol());
 }
-
 
 double PipSize(string symbol)
 {
@@ -318,20 +210,16 @@ double PipSize(string symbol)
       SYMBOL_DIGITS
    );
 
-
    if((digits % 2) == 1)
       return point * 10.0;
 
-
    return point;
 }
-
 
 double PipsToDouble(double pips)
 {
    return pips * PipSize(Symbol());
 }
-
 
 double PipsToDouble(
    double pips,
@@ -341,11 +229,6 @@ double PipsToDouble(
    return pips * PipSize(symbol);
 }
 
-
-//==================================================
-// SPRAWDZENIE, CZY RYNEK JEST OTWARTY
-//==================================================
-
 bool IsMarketOpen()
 {
    return IsMarketOpen(
@@ -354,7 +237,6 @@ bool IsMarketOpen()
    );
 }
 
-
 bool IsMarketOpen(datetime time)
 {
    return IsMarketOpen(
@@ -362,7 +244,6 @@ bool IsMarketOpen(datetime time)
       time
    );
 }
-
 
 bool IsMarketOpen(
    string symbol,
@@ -375,7 +256,6 @@ bool IsMarketOpen(
 
    static datetime sessionStart = 0;
    static datetime sessionEnd   = 0;
-
 
    if(
       lastSymbol == symbol &&
@@ -400,27 +280,23 @@ bool IsMarketOpen(
       }
    }
 
-
    lastSymbol = symbol;
 
-
    MqlDateTime marketTime;
+
    TimeToStruct(
       time,
       marketTime
    );
-
 
    datetime secondsFromMidnight =
       marketTime.hour * 3600 +
       marketTime.min * 60 +
       marketTime.sec;
 
-
    marketTime.hour = 0;
    marketTime.min  = 0;
    marketTime.sec  = 0;
-
 
    datetime dayStart =
       StructToTime(marketTime);
@@ -428,14 +304,11 @@ bool IsMarketOpen(
    datetime dayEnd =
       dayStart + 86400;
 
-
    datetime fromTime;
    datetime toTime;
 
-
    sessionStart = dayStart;
    sessionEnd   = dayEnd;
-
 
    for(int session = 0; ; session++)
    {
@@ -455,7 +328,6 @@ bool IsMarketOpen(
          return false;
       }
 
-
       if(secondsFromMidnight < fromTime)
       {
          sessionEnd =
@@ -466,7 +338,6 @@ bool IsMarketOpen(
          return false;
       }
 
-
       if(secondsFromMidnight > toTime)
       {
          sessionStart =
@@ -474,7 +345,6 @@ bool IsMarketOpen(
 
          continue;
       }
-
 
       sessionStart =
          dayStart + fromTime;
@@ -487,14 +357,8 @@ bool IsMarketOpen(
       return true;
    }
 
-
    return false;
 }
-
-
-//==================================================
-// SPRAWDZENIE NOWEJ ŚWIECY
-//==================================================
 
 bool IsNewBar(bool firstCall)
 {
@@ -506,14 +370,11 @@ bool IsNewBar(bool firstCall)
       0
    );
 
-
    if(!firstCall)
       return false;
 
-
    if(currentBarTime <= 0)
       return false;
-
 
    if(previousBarTime != currentBarTime)
    {
@@ -521,14 +382,8 @@ bool IsNewBar(bool firstCall)
       return true;
    }
 
-
    return false;
 }
-
-
-//==================================================
-// SPRAWDZENIE ZEZWOLENIA NA HANDEL
-//==================================================
 
 bool IsTradeAllowed()
 {
@@ -550,11 +405,6 @@ bool IsTradeAllowed()
       );
 }
 
-
-//==================================================
-// INICJALIZACJA EA
-//==================================================
-
 int OnInit()
 {
    TakeProfit =
@@ -562,14 +412,9 @@ int OnInit()
          InpTakeProfitPips
       );
 
-
-
    Trade.SetExpertMagicNumber(
       InpMagic
    );
-
-
-   // Średnia sygnałowa szybka
 
    FastHandle = iMA(
       Symbol(),
@@ -585,9 +430,6 @@ int OnInit()
       true
    );
 
-
-   // Średnia sygnałowa wolna
-
    SlowHandle = iMA(
       Symbol(),
       Period(),
@@ -601,9 +443,6 @@ int OnInit()
       SlowBuffer,
       true
    );
-
-
-   // Średnia trendowa szybka
 
    TrendFastHandle = iMA(
       Symbol(),
@@ -619,9 +458,6 @@ int OnInit()
       true
    );
 
-
-   // Średnia trendowa wolna
-
    TrendSlowHandle = iMA(
       Symbol(),
       Period(),
@@ -636,7 +472,6 @@ int OnInit()
       true
    );
 
-
    if(
       FastHandle == INVALID_HANDLE ||
       SlowHandle == INVALID_HANDLE
@@ -648,7 +483,6 @@ int OnInit()
 
       return INIT_FAILED;
    }
-
 
    if(
       TrendFastHandle == INVALID_HANDLE ||
@@ -662,19 +496,10 @@ int OnInit()
       return INIT_FAILED;
    }
 
-
-   // Zapobiega otwarciu pozycji natychmiast po uruchomieniu EA.
-
    IsNewBar(true);
-
 
    return INIT_SUCCEEDED;
 }
-
-
-//==================================================
-// WYŁĄCZENIE EA
-//==================================================
 
 void OnDeinit(const int reason)
 {
@@ -691,11 +516,6 @@ void OnDeinit(const int reason)
       IndicatorRelease(TrendSlowHandle);
 }
 
-
-//==================================================
-// MAKSYMALNY RUCH OD OSTATNIEGO PRZECIĘCIA TRENDU
-//==================================================
-
 bool GetTrendMoveSinceLastCross(
    const bool wantBuyTrend,
    double &crossPrice,
@@ -706,7 +526,6 @@ bool GetTrendMoveSinceLastCross(
    crossPrice  = 0.0;
    maxMovePips = 0.0;
    crossShift  = -1;
-
 
    int availableBars = Bars(
       Symbol(),
@@ -721,7 +540,6 @@ bool GetTrendMoveSinceLastCross(
       TrendSlowHandle
    );
 
-
    int usableBars = MathMin(
       availableBars,
       MathMin(
@@ -730,12 +548,10 @@ bool GetTrendMoveSinceLastCross(
       )
    );
 
-
    int searchLimit = MathMin(
       InpTrendCrossSearchBars,
       usableBars - 2
    );
-
 
    if(searchLimit < 2)
    {
@@ -746,14 +562,11 @@ bool GetTrendMoveSinceLastCross(
       return false;
    }
 
-
    int valuesNeeded =
       searchLimit + 2;
 
-
    double trendFastHistory[];
    double trendSlowHistory[];
-
 
    ArraySetAsSeries(
       trendFastHistory,
@@ -764,7 +577,6 @@ bool GetTrendMoveSinceLastCross(
       trendSlowHistory,
       true
    );
-
 
    if(
       CopyBuffer(
@@ -783,7 +595,6 @@ bool GetTrendMoveSinceLastCross(
       return false;
    }
 
-
    if(
       CopyBuffer(
          TrendSlowHandle,
@@ -801,10 +612,6 @@ bool GetTrendMoveSinceLastCross(
       return false;
    }
 
-
-   // Szukanie ostatniego przecięcia zgodnego
-   // z obecnym kierunkiem trendu.
-
    for(
       int shift = 1;
       shift <= searchLimit;
@@ -812,7 +619,6 @@ bool GetTrendMoveSinceLastCross(
    )
    {
       bool trendCross = false;
-
 
       if(wantBuyTrend)
       {
@@ -833,14 +639,12 @@ bool GetTrendMoveSinceLastCross(
             trendSlowHistory[shift + 1];
       }
 
-
       if(trendCross)
       {
          crossShift = shift;
          break;
       }
    }
-
 
    if(crossShift < 0)
    {
@@ -852,13 +656,11 @@ bool GetTrendMoveSinceLastCross(
       return false;
    }
 
-
    crossPrice = iClose(
       Symbol(),
       Period(),
       crossShift
    );
-
 
    if(crossPrice <= 0.0)
    {
@@ -869,25 +671,17 @@ bool GetTrendMoveSinceLastCross(
       return false;
    }
 
-
    double pipSize =
       PipSize(Symbol());
-
 
    if(pipSize <= 0.0)
       return false;
 
-
-   // Nie uwzględniamy HIGH/LOW świecy przecięcia.
-   // Liczymy ruch od jej zamknięcia.
-
    int barsAfterCross =
       crossShift;
 
-
    if(barsAfterCross < 1)
       barsAfterCross = 1;
-
 
    if(wantBuyTrend)
    {
@@ -898,7 +692,6 @@ bool GetTrendMoveSinceLastCross(
          true
       );
 
-
       int copied = CopyHigh(
          Symbol(),
          Period(),
@@ -907,10 +700,8 @@ bool GetTrendMoveSinceLastCross(
          highs
       );
 
-
       if(copied < barsAfterCross)
          return false;
-
 
       int highestIndex = ArrayMaximum(
          highs,
@@ -918,14 +709,11 @@ bool GetTrendMoveSinceLastCross(
          copied
       );
 
-
       if(highestIndex < 0)
          return false;
 
-
       double highestPrice =
          highs[highestIndex];
-
 
       maxMovePips = MathMax(
          0.0,
@@ -946,7 +734,6 @@ bool GetTrendMoveSinceLastCross(
          true
       );
 
-
       int copied = CopyLow(
          Symbol(),
          Period(),
@@ -955,10 +742,8 @@ bool GetTrendMoveSinceLastCross(
          lows
       );
 
-
       if(copied < barsAfterCross)
          return false;
-
 
       int lowestIndex = ArrayMinimum(
          lows,
@@ -966,14 +751,11 @@ bool GetTrendMoveSinceLastCross(
          copied
       );
 
-
       if(lowestIndex < 0)
          return false;
 
-
       double lowestPrice =
          lows[lowestIndex];
-
 
       maxMovePips = MathMax(
          0.0,
@@ -986,14 +768,8 @@ bool GetTrendMoveSinceLastCross(
       );
    }
 
-
    return true;
 }
-
-
-//==================================================
-// BLOKADA RUCHU TRENDU
-//==================================================
 
 bool IsTrendMoveEntryAllowed(
    const bool wantBuyTrend
@@ -1007,11 +783,9 @@ bool IsTrendMoveEntryAllowed(
       return true;
    }
 
-
    double crossPrice  = 0.0;
    double maxMovePips = 0.0;
    int crossShift     = -1;
-
 
    if(
       !GetTrendMoveSinceLastCross(
@@ -1030,7 +804,6 @@ bool IsTrendMoveEntryAllowed(
       return false;
    }
 
-
    PrintFormat(
       "TREND %s: przecięcie=%.5f, maksymalny ruch=%.1f pips, limit=%.1f pips.",
       wantBuyTrend ? "BUY" : "SELL",
@@ -1038,7 +811,6 @@ bool IsTrendMoveEntryAllowed(
       maxMovePips,
       InpMaxTrendMovePips
    );
-
 
    if(maxMovePips >= InpMaxTrendMovePips)
    {
@@ -1052,14 +824,8 @@ bool IsTrendMoveEntryAllowed(
       return false;
    }
 
-
    return true;
 }
-
-
-//==================================================
-// SPRAWDZENIE OTWARTEJ POZYCJI
-//==================================================
 
 bool HasOpenPositionForThisEA()
 {
@@ -1072,14 +838,11 @@ bool HasOpenPositionForThisEA()
       ulong ticket =
          PositionGetTicket(index);
 
-
       if(ticket == 0)
          continue;
 
-
       if(!PositionSelectByTicket(ticket))
          continue;
-
 
       string positionSymbol = PositionGetString(
          POSITION_SYMBOL
@@ -1089,32 +852,22 @@ bool HasOpenPositionForThisEA()
          POSITION_MAGIC
       );
 
-
       if(positionSymbol != Symbol())
          continue;
-
 
       if(positionMagic != (long)InpMagic)
          continue;
 
-
       return true;
    }
 
-
    return false;
 }
-
-
-//==================================================
-// TYLKO JEDNA POZYCJA NARAZ
-//==================================================
 
 bool IsSingleOpenPositionAllowed()
 {
    if(!InpOnlyOneOpenPosition)
       return true;
-
 
    if(HasOpenPositionForThisEA())
    {
@@ -1125,14 +878,159 @@ bool IsSingleOpenPositionAllowed()
       return false;
    }
 
-
    return true;
 }
 
+bool IsDirectionCooldownAllowed(
+   const ENUM_ORDER_TYPE orderType
+)
+{
+   if(
+      !InpUseDirectionCooldown ||
+      InpDirectionCooldownMinutes <= 0
+   )
+   {
+      return true;
+   }
 
-//==================================================
-// LICZENIE WEJŚĆ OD PRZECIĘCIA TRENDU
-//==================================================
+   bool wantBuy =
+      orderType == ORDER_TYPE_BUY;
+
+   datetime currentTime =
+      TimeCurrent();
+
+   datetime cooldownStart =
+      currentTime -
+      (datetime)(InpDirectionCooldownMinutes * 60);
+
+   ResetLastError();
+
+   if(
+      !HistorySelect(
+         cooldownStart,
+         currentTime
+      )
+   )
+   {
+      PrintFormat(
+         "SKIP %s: nie można sprawdzić cooldownu. Błąd=%d.",
+         wantBuy ? "BUY" : "SELL",
+         GetLastError()
+      );
+
+      return false;
+   }
+
+   datetime lastEntryTime = 0;
+   int totalDeals = HistoryDealsTotal();
+
+   for(
+      int index = totalDeals - 1;
+      index >= 0;
+      index--
+   )
+   {
+      ulong dealTicket =
+         HistoryDealGetTicket(index);
+
+      if(dealTicket == 0)
+         continue;
+
+      string dealSymbol =
+         HistoryDealGetString(
+            dealTicket,
+            DEAL_SYMBOL
+         );
+
+      long dealMagic =
+         HistoryDealGetInteger(
+            dealTicket,
+            DEAL_MAGIC
+         );
+
+      if(dealSymbol != Symbol())
+         continue;
+
+      if(dealMagic != (long)InpMagic)
+         continue;
+
+      ENUM_DEAL_ENTRY dealEntry =
+         (ENUM_DEAL_ENTRY)HistoryDealGetInteger(
+            dealTicket,
+            DEAL_ENTRY
+         );
+
+      if(
+         dealEntry != DEAL_ENTRY_IN &&
+         dealEntry != DEAL_ENTRY_INOUT
+      )
+      {
+         continue;
+      }
+
+      ENUM_DEAL_TYPE dealType =
+         (ENUM_DEAL_TYPE)HistoryDealGetInteger(
+            dealTicket,
+            DEAL_TYPE
+         );
+
+      bool sameDirection =
+         (
+            wantBuy &&
+            dealType == DEAL_TYPE_BUY
+         )
+         ||
+         (
+            !wantBuy &&
+            dealType == DEAL_TYPE_SELL
+         );
+
+      if(!sameDirection)
+         continue;
+
+      datetime dealTime =
+         (datetime)HistoryDealGetInteger(
+            dealTicket,
+            DEAL_TIME
+         );
+
+      if(dealTime > lastEntryTime)
+         lastEntryTime = dealTime;
+   }
+
+   if(lastEntryTime <= 0)
+      return true;
+
+   int elapsedSeconds =
+      (int)(currentTime - lastEntryTime);
+
+   int cooldownSeconds =
+      InpDirectionCooldownMinutes * 60;
+
+   if(elapsedSeconds < cooldownSeconds)
+   {
+      int remainingSeconds =
+         cooldownSeconds - elapsedSeconds;
+
+      int remainingMinutes =
+         (remainingSeconds + 59) / 60;
+
+      PrintFormat(
+         "SKIP %s: cooldown po ostatnim %s nadal trwa. Ostatnie otwarcie=%s, pozostało około %d min.",
+         wantBuy ? "BUY" : "SELL",
+         wantBuy ? "BUY" : "SELL",
+         TimeToString(
+            lastEntryTime,
+            TIME_DATE | TIME_MINUTES | TIME_SECONDS
+         ),
+         remainingMinutes
+      );
+
+      return false;
+   }
+
+   return true;
+}
 
 int CountEntriesSinceTrendCross(
    const bool wantBuyTrend,
@@ -1143,10 +1041,8 @@ int CountEntriesSinceTrendCross(
    crossTime  = 0;
    crossShift = -1;
 
-
    double crossPrice  = 0.0;
    double maxMovePips = 0.0;
-
 
    if(
       !GetTrendMoveSinceLastCross(
@@ -1160,20 +1056,16 @@ int CountEntriesSinceTrendCross(
       return -1;
    }
 
-
    crossTime = iTime(
       Symbol(),
       Period(),
       crossShift
    );
 
-
    if(crossTime <= 0)
       return -1;
 
-
    ResetLastError();
-
 
    if(
       !HistorySelect(
@@ -1190,10 +1082,8 @@ int CountEntriesSinceTrendCross(
       return -1;
    }
 
-
    int entries    = 0;
    int totalDeals = HistoryDealsTotal();
-
 
    for(
       int index = 0;
@@ -1204,10 +1094,8 @@ int CountEntriesSinceTrendCross(
       ulong dealTicket =
          HistoryDealGetTicket(index);
 
-
       if(dealTicket == 0)
          continue;
-
 
       string dealSymbol = HistoryDealGetString(
          dealTicket,
@@ -1219,21 +1107,17 @@ int CountEntriesSinceTrendCross(
          DEAL_MAGIC
       );
 
-
       if(dealSymbol != Symbol())
          continue;
 
-
       if(dealMagic != (long)InpMagic)
          continue;
-
 
       ENUM_DEAL_ENTRY dealEntry =
          (ENUM_DEAL_ENTRY)HistoryDealGetInteger(
             dealTicket,
             DEAL_ENTRY
          );
-
 
       if(
          dealEntry != DEAL_ENTRY_IN &&
@@ -1243,13 +1127,11 @@ int CountEntriesSinceTrendCross(
          continue;
       }
 
-
       ENUM_DEAL_TYPE dealType =
          (ENUM_DEAL_TYPE)HistoryDealGetInteger(
             dealTicket,
             DEAL_TYPE
          );
-
 
       if(
          wantBuyTrend &&
@@ -1267,14 +1149,8 @@ int CountEntriesSinceTrendCross(
       }
    }
 
-
    return entries;
 }
-
-
-//==================================================
-// LIMIT POZYCJI W TRENDZIE
-//==================================================
 
 bool IsTrendPositionLimitAllowed(
    const bool wantBuyTrend
@@ -1283,17 +1159,14 @@ bool IsTrendPositionLimitAllowed(
    if(InpMaxPositionsPerTrend <= 0)
       return true;
 
-
    datetime crossTime = 0;
    int crossShift     = -1;
-
 
    int entries = CountEntriesSinceTrendCross(
       wantBuyTrend,
       crossTime,
       crossShift
    );
-
 
    if(entries < 0)
    {
@@ -1304,7 +1177,6 @@ bool IsTrendPositionLimitAllowed(
 
       return false;
    }
-
 
    PrintFormat(
       "TREND %s: wykorzystane wejścia=%d/%d, początek=%s.",
@@ -1317,7 +1189,6 @@ bool IsTrendPositionLimitAllowed(
       )
    );
 
-
    if(entries >= InpMaxPositionsPerTrend)
    {
       PrintFormat(
@@ -1329,43 +1200,25 @@ bool IsTrendPositionLimitAllowed(
       return false;
    }
 
-
    return true;
 }
-
-
-//==================================================
-// GŁÓWNA FUNKCJA EA
-//==================================================
 
 void OnTick()
 {
    if(!IsTradeAllowed())
       return;
 
-
    if(!IsMarketOpen())
       return;
 
-
-// Trailing po wolnej średniej działa na każdym ticku.
-
-if(InpUseMATrailingStop)
-   ApplyTrailingStop();
+   if(InpUseMATrailingStop)
+      ApplyTrailingStop();
 
    if(!IsTimeToTrade())
       return;
 
-
-   // Sygnały tylko raz na nowej świecy.
-
    if(!IsNewBar(true))
       return;
-
-
-   //==================================================
-   // POBRANIE ŚREDNICH SYGNAŁOWYCH
-   //==================================================
 
    if(
       CopyBuffer(
@@ -1384,7 +1237,6 @@ if(InpUseMATrailingStop)
       return;
    }
 
-
    if(
       CopyBuffer(
          SlowHandle,
@@ -1401,11 +1253,6 @@ if(InpUseMATrailingStop)
 
       return;
    }
-
-
-   //==================================================
-   // POBRANIE ŚREDNICH TRENDOWYCH
-   //==================================================
 
    if(
       CopyBuffer(
@@ -1424,7 +1271,6 @@ if(InpUseMATrailingStop)
       return;
    }
 
-
    if(
       CopyBuffer(
          TrendSlowHandle,
@@ -1442,71 +1288,42 @@ if(InpUseMATrailingStop)
       return;
    }
 
-
-   //==================================================
-   // PRZECIĘCIA ŚREDNICH SYGNAŁOWYCH
-   //==================================================
-
    bool crossUp =
       FastBuffer[1] > SlowBuffer[1] &&
       FastBuffer[2] <= SlowBuffer[2];
-
 
    bool crossDown =
       FastBuffer[1] < SlowBuffer[1] &&
       FastBuffer[2] >= SlowBuffer[2];
 
-
-   //==================================================
-   // KIERUNEK TRENDU
-   //==================================================
-
    bool trendBuy =
       TrendFastBuffer[1] >
       TrendSlowBuffer[1];
 
-
    bool trendSell =
       TrendFastBuffer[1] <
       TrendSlowBuffer[1];
-
-
-   //==================================================
-   // SYGNAŁ BUY
-   //==================================================
 
    if(crossUp && trendBuy)
    {
       if(!IsTrendMoveEntryAllowed(true))
          return;
 
-
       OpenTrade(
          ORDER_TYPE_BUY
       );
    }
-
-
-   //==================================================
-   // SYGNAŁ SELL
-   //==================================================
 
    if(crossDown && trendSell)
    {
       if(!IsTrendMoveEntryAllowed(false))
          return;
 
-
       OpenTrade(
          ORDER_TYPE_SELL
       );
    }
 }
-
-
-//==================================================
-// NAJWYŻSZE HIGH
-//==================================================
 
 bool GetHighestHigh(
    const int lookback,
@@ -1516,7 +1333,6 @@ bool GetHighestHigh(
    if(lookback < 1)
       return false;
 
-
    if(
       Bars(
          Symbol(),
@@ -1527,14 +1343,12 @@ bool GetHighestHigh(
       return false;
    }
 
-
    double highs[];
 
    ArraySetAsSeries(
       highs,
       true
    );
-
 
    int copied = CopyHigh(
       Symbol(),
@@ -1544,10 +1358,8 @@ bool GetHighestHigh(
       highs
    );
 
-
    if(copied < lookback)
       return false;
-
 
    int highestIndex = ArrayMaximum(
       highs,
@@ -1555,22 +1367,14 @@ bool GetHighestHigh(
       lookback
    );
 
-
    if(highestIndex < 0)
       return false;
-
 
    highest =
       highs[highestIndex];
 
-
    return true;
 }
-
-
-//==================================================
-// NAJNIŻSZE LOW
-//==================================================
 
 bool GetLowestLow(
    const int lookback,
@@ -1579,7 +1383,6 @@ bool GetLowestLow(
 {
    if(lookback < 1)
       return false;
-
 
    if(
       Bars(
@@ -1591,14 +1394,12 @@ bool GetLowestLow(
       return false;
    }
 
-
    double lows[];
 
    ArraySetAsSeries(
       lows,
       true
    );
-
 
    int copied = CopyLow(
       Symbol(),
@@ -1608,10 +1409,8 @@ bool GetLowestLow(
       lows
    );
 
-
    if(copied < lookback)
       return false;
-
 
    int lowestIndex = ArrayMinimum(
       lows,
@@ -1619,22 +1418,14 @@ bool GetLowestLow(
       lookback
    );
 
-
    if(lowestIndex < 0)
       return false;
-
 
    lowest =
       lows[lowestIndex];
 
-
    return true;
 }
-
-
-//==================================================
-// LICZBA ŚWIEC W AKTUALNYM TRENDZIE
-//==================================================
 
 int GetTrendRunBars(
    bool wantBuyTrend,
@@ -1646,20 +1437,16 @@ int GetTrendRunBars(
       Period()
    );
 
-
    int limit = MathMin(
       maxLookback,
       availableBars - 2
    );
 
-
    if(limit < 1)
       return 0;
 
-
    double trendFastValues[];
    double trendSlowValues[];
-
 
    ArraySetAsSeries(
       trendFastValues,
@@ -1670,7 +1457,6 @@ int GetTrendRunBars(
       trendSlowValues,
       true
    );
-
 
    if(
       CopyBuffer(
@@ -1685,7 +1471,6 @@ int GetTrendRunBars(
       return 0;
    }
 
-
    if(
       CopyBuffer(
          TrendSlowHandle,
@@ -1699,9 +1484,7 @@ int GetTrendRunBars(
       return 0;
    }
 
-
    int count = 0;
-
 
    for(
       int index = 0;
@@ -1739,40 +1522,22 @@ int GetTrendRunBars(
       }
    }
 
-
    return count;
 }
-
-
-//==================================================
-// OTWIERANIE POZYCJI
-//==================================================
 
 void OpenTrade(ENUM_ORDER_TYPE type)
 {
    bool wantBuy =
       type == ORDER_TYPE_BUY;
 
-
-   //==================================================
-   // TYLKO JEDNA POZYCJA NARAZ
-   //==================================================
-
    if(!IsSingleOpenPositionAllowed())
       return;
 
-
-   //==================================================
-   // LIMIT WEJŚĆ W TRENDZIE
-   //==================================================
+   if(!IsDirectionCooldownAllowed(type))
+      return;
 
    if(!IsTrendPositionLimitAllowed(wantBuy))
       return;
-
-
-   //==================================================
-   // AKTUALNE CENY
-   //==================================================
 
    double ask = SymbolInfoDouble(
       Symbol(),
@@ -1792,7 +1557,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
    double pipSize =
       PipSize(Symbol());
 
-
    if(
       ask <= 0.0 ||
       bid <= 0.0 ||
@@ -1808,10 +1572,8 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       return;
    }
 
-
    double price =
       wantBuy ? ask : bid;
-
 
    double minimumStopDistance =
       (double)SymbolInfoInteger(
@@ -1821,16 +1583,10 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       *
       point;
 
-
-   //==================================================
-   // ROOM DO SZCZYTU LUB DOŁKA
-   //==================================================
-
    int roomBarsUsed = GetTrendRunBars(
       wantBuy,
       InpRoomLookbackBars
    );
-
 
    if(roomBarsUsed < 1)
    {
@@ -1842,20 +1598,16 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       return;
    }
 
-
    double requiredRoom =
       PipsToDouble(
          InpMinRoomPips
       );
 
-
    double roomExtreme = 0.0;
-
 
    if(wantBuy)
    {
       double highest = 0.0;
-
 
       if(
          !GetHighestHigh(
@@ -1871,16 +1623,13 @@ void OpenTrade(ENUM_ORDER_TYPE type)
          return;
       }
 
-
       roomExtreme = highest;
-
 
       double room =
          roomExtreme - ask;
 
       double roomPips =
          room / pipSize;
-
 
       if(room < requiredRoom)
       {
@@ -1897,7 +1646,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
    {
       double lowest = 0.0;
 
-
       if(
          !GetLowestLow(
             roomBarsUsed,
@@ -1912,16 +1660,13 @@ void OpenTrade(ENUM_ORDER_TYPE type)
          return;
       }
 
-
       roomExtreme = lowest;
-
 
       double room =
          bid - roomExtreme;
 
       double roomPips =
          room / pipSize;
-
 
       if(room < requiredRoom)
       {
@@ -1935,18 +1680,12 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       }
    }
 
-
-   //==================================================
-   // WOLNA ŚREDNIA TRENDOWA DLA STOP LOSS
-   //==================================================
-
    double trendSlowValues[];
 
    ArraySetAsSeries(
       trendSlowValues,
       true
    );
-
 
    if(
       CopyBuffer(
@@ -1966,12 +1705,8 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       return;
    }
 
-
-   // Ostatnia zamknięta świeca.
-
    double trendSlowMA =
       trendSlowValues[1];
-
 
    if(trendSlowMA <= 0.0)
    {
@@ -1982,28 +1717,18 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       return;
    }
 
-
-   //==================================================
-   // STOP LOSS NA ŚREDNIEJ
-   //==================================================
-
    double slBuffer =
       PipsToDouble(
          InpSLBufferPips
       );
 
-
    double sl = 0.0;
-
 
    if(wantBuy)
    {
-      // BUY: SL pod wolną średnią trendową.
-
       sl =
          trendSlowMA -
          slBuffer;
-
 
       if(sl >= bid)
       {
@@ -2018,11 +1743,9 @@ void OpenTrade(ENUM_ORDER_TYPE type)
          return;
       }
 
-
       double maximumAllowedSL =
          bid -
          minimumStopDistance;
-
 
       if(
          minimumStopDistance > 0.0 &&
@@ -2035,12 +1758,9 @@ void OpenTrade(ENUM_ORDER_TYPE type)
    }
    else
    {
-      // SELL: SL nad wolną średnią trendową.
-
       sl =
          trendSlowMA +
          slBuffer;
-
 
       if(sl <= ask)
       {
@@ -2055,11 +1775,9 @@ void OpenTrade(ENUM_ORDER_TYPE type)
          return;
       }
 
-
       double minimumAllowedSL =
          ask +
          minimumStopDistance;
-
 
       if(
          minimumStopDistance > 0.0 &&
@@ -2071,13 +1789,7 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       }
    }
 
-
-   //==================================================
-   // ODLEGŁOŚĆ STOP LOSS
-   //==================================================
-
    double slDistancePips = 0.0;
-
 
    if(wantBuy)
    {
@@ -2100,7 +1812,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
          pipSize;
    }
 
-
    if(slDistancePips <= 0.0)
    {
       PrintFormat(
@@ -2110,7 +1821,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
 
       return;
    }
-
 
    if(
       InpMaxSLPips > 0.0 &&
@@ -2127,13 +1837,7 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       return;
    }
 
-
-   //==================================================
-   // TAKE PROFIT
-   //==================================================
-
    double tp = 0.0;
-
 
    if(InpTPMode == TP_MODE_OFF)
    {
@@ -2164,13 +1868,11 @@ void OpenTrade(ENUM_ORDER_TYPE type)
             InpTPBufferPips
          );
 
-
       if(wantBuy)
       {
          tp =
             roomExtreme -
             tpBuffer;
-
 
          if(
             tp <=
@@ -2191,7 +1893,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
             roomExtreme +
             tpBuffer;
 
-
          if(
             tp >=
             price -
@@ -2207,11 +1908,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       }
    }
 
-
-   //==================================================
-   // DOSTOSOWANIE TP DO MINIMALNEGO DYSTANSU
-   //==================================================
-
    if(
       tp > 0.0 &&
       minimumStopDistance > 0.0
@@ -2223,7 +1919,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
             ask +
             minimumStopDistance;
 
-
          if(tp < minimumTP)
             tp = minimumTP;
       }
@@ -2233,16 +1928,10 @@ void OpenTrade(ENUM_ORDER_TYPE type)
             bid -
             minimumStopDistance;
 
-
          if(tp > maximumTP)
             tp = maximumTP;
       }
    }
-
-
-   //==================================================
-   // TP MUSI BYĆ WIĘKSZY OD SL
-   //==================================================
 
    if(
       InpRequireTPGreaterThanSL &&
@@ -2250,7 +1939,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
    )
    {
       double tpDistancePips = 0.0;
-
 
       if(wantBuy)
       {
@@ -2273,7 +1961,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
             pipSize;
       }
 
-
       if(tpDistancePips <= slDistancePips)
       {
          PrintFormat(
@@ -2287,11 +1974,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       }
    }
 
-
-   //==================================================
-   // NORMALIZACJA
-   //==================================================
-
    price = NormalizeDouble(
       price,
       Digits()
@@ -2302,7 +1984,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       Digits()
    );
 
-
    if(tp != 0.0)
    {
       tp = NormalizeDouble(
@@ -2310,7 +1991,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
          Digits()
       );
    }
-
 
    PrintFormat(
       "OPEN %s: cena=%.5f, SL=%.5f na MA %d, średnia=%.5f, SL dystans=%.1f pips, TP=%.5f.",
@@ -2323,13 +2003,7 @@ void OpenTrade(ENUM_ORDER_TYPE type)
       tp
    );
 
-
-   //==================================================
-   // OTWARCIE POZYCJI
-   //==================================================
-
    ResetLastError();
-
 
    if(
       !Trade.PositionOpen(
@@ -2365,15 +2039,6 @@ void OpenTrade(ENUM_ORDER_TYPE type)
    }
 }
 
-
-//==================================================
-// TRAILING STOP
-//==================================================
-
-//==================================================
-// TRAILING STOP PO WOLNEJ ŚREDNIEJ TRENDOWEJ
-//==================================================
-
 void ApplyTrailingStop()
 {
    double ask = SymbolInfoDouble(
@@ -2391,7 +2056,6 @@ void ApplyTrailingStop()
       SYMBOL_POINT
    );
 
-
    if(
       ask <= 0.0 ||
       bid <= 0.0 ||
@@ -2401,17 +2065,12 @@ void ApplyTrailingStop()
       return;
    }
 
-
-   // Pobranie aktualnej wartości wolnej średniej,
-   // czyli domyślnie EMA 200.
-
    double trendSlowValues[];
 
    ArraySetAsSeries(
       trendSlowValues,
       true
    );
-
 
    if(
       CopyBuffer(
@@ -2430,24 +2089,16 @@ void ApplyTrailingStop()
       return;
    }
 
-
    double trendSlowMA =
       trendSlowValues[0];
 
-
    if(trendSlowMA <= 0.0)
       return;
-
-
-   // Bufor w pipsach pod/nad średnią.
 
    double slBuffer =
       PipsToDouble(
          InpSLBufferPips
       );
-
-
-   // Minimalna dozwolona odległość SL od ceny.
 
    long stopsLevel =
       SymbolInfoInteger(
@@ -2461,7 +2112,6 @@ void ApplyTrailingStop()
          SYMBOL_TRADE_FREEZE_LEVEL
       );
 
-
    double minimumStopDistance =
       (double)MathMax(
          stopsLevel,
@@ -2469,9 +2119,6 @@ void ApplyTrailingStop()
       )
       *
       point;
-
-
-   // Sprawdzenie wszystkich otwartych pozycji.
 
    for(
       int index = PositionsTotal() - 1;
@@ -2482,37 +2129,22 @@ void ApplyTrailingStop()
       ulong ticket =
          PositionGetTicket(index);
 
-
       if(ticket == 0)
          continue;
-
 
       if(!Position.SelectByTicket(ticket))
          continue;
 
-
-      // Tylko pozycje na aktualnym symbolu.
-
       if(Position.Symbol() != Symbol())
          continue;
 
-
-      // Tylko pozycje otwarte przez ten EA.
-
       if(Position.Magic() != InpMagic)
          continue;
-
 
       double currentSL =
          Position.StopLoss();
 
       double newSL = 0.0;
-
-
-      //==================================================
-      // BUY
-      // SL = EMA 200 minus bufor
-      //==================================================
 
       if(
          Position.PositionType() ==
@@ -2523,13 +2155,9 @@ void ApplyTrailingStop()
             trendSlowMA -
             slBuffer;
 
-
-         // SL musi znajdować się pod aktualnym BID.
-
          double maximumAllowedSL =
             bid -
             minimumStopDistance;
-
 
          if(newSL > maximumAllowedSL)
          {
@@ -2537,15 +2165,11 @@ void ApplyTrailingStop()
                maximumAllowedSL;
          }
 
-
          newSL =
             NormalizeDouble(
                newSL,
                Digits()
             );
-
-
-         // Nie ustawiamy nieprawidłowego SL.
 
          if(
             newSL <= 0.0 ||
@@ -2555,10 +2179,6 @@ void ApplyTrailingStop()
             continue;
          }
 
-
-         // Dla BUY przesuwamy SL wyłącznie do góry.
-         // SL nigdy nie zostanie cofnięty w dół.
-
          if(
             currentSL > 0.0 &&
             newSL <= currentSL + point * 0.5
@@ -2567,9 +2187,7 @@ void ApplyTrailingStop()
             continue;
          }
 
-
          ResetLastError();
-
 
          if(
             !Trade.PositionModify(
@@ -2600,12 +2218,6 @@ void ApplyTrailingStop()
          }
       }
 
-
-      //==================================================
-      // SELL
-      // SL = EMA 200 plus bufor
-      //==================================================
-
       if(
          Position.PositionType() ==
          POSITION_TYPE_SELL
@@ -2615,13 +2227,9 @@ void ApplyTrailingStop()
             trendSlowMA +
             slBuffer;
 
-
-         // SL musi znajdować się nad aktualnym ASK.
-
          double minimumAllowedSL =
             ask +
             minimumStopDistance;
-
 
          if(newSL < minimumAllowedSL)
          {
@@ -2629,26 +2237,16 @@ void ApplyTrailingStop()
                minimumAllowedSL;
          }
 
-
          newSL =
             NormalizeDouble(
                newSL,
                Digits()
             );
 
-
-         // Nie ustawiamy nieprawidłowego SL.
-
-         if(
-            newSL <= ask
-         )
+         if(newSL <= ask)
          {
             continue;
          }
-
-
-         // Dla SELL przesuwamy SL wyłącznie w dół.
-         // SL nigdy nie zostanie cofnięty do góry.
 
          if(
             currentSL > 0.0 &&
@@ -2658,9 +2256,7 @@ void ApplyTrailingStop()
             continue;
          }
 
-
          ResetLastError();
-
 
          if(
             !Trade.PositionModify(
