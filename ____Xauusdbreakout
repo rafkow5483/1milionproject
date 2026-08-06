@@ -1,0 +1,370 @@
+//+------------------------------------------------------------------+
+//|                                              CandleBreakEA.mq5    |
+//|  BUY: świeca wzrostowa zamyka się powyżej High ostatniej         |
+//|       świecy spadkowej                                           |
+//|  SELL: świeca spadkowa zamyka się poniżej Low ostatniej          |
+//|        świecy wzrostowej                                         |
+//+------------------------------------------------------------------+
+#property strict
+
+#include <Trade/Trade.mqh>
+
+CTrade trade;
+
+//--- Ustawienia
+input double Lots              = 0.10;
+input int    StopLossPips      = 100;
+input int    TakeProfitPips    = 100;
+input ulong  MagicNumber       = 123456;
+input int    MaxSearchCandles  = 100;
+input int    SlippagePoints    = 20;
+input bool   OnePositionOnly   = true;
+
+//--- Czas ostatnio sprawdzanej świecy
+datetime lastBarTime = 0;
+
+//+------------------------------------------------------------------+
+//| Obliczanie wielkości jednego pipsa                               |
+//+------------------------------------------------------------------+
+double PipSize()
+{
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+   // Dla instrumentów z 5 lub 3 miejscami po przecinku
+   if(digits == 5 || digits == 3)
+      return point * 10.0;
+
+   return point;
+}
+
+//+------------------------------------------------------------------+
+//| Normalizacja ceny                                                |
+//+------------------------------------------------------------------+
+double NormalizePrice(double price)
+{
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   return NormalizeDouble(price, digits);
+}
+
+//+------------------------------------------------------------------+
+//| Sprawdzenie, czy świeca jest wzrostowa                           |
+//+------------------------------------------------------------------+
+bool IsBullish(int shift)
+{
+   double openPrice  = iOpen(_Symbol, _Period, shift);
+   double closePrice = iClose(_Symbol, _Period, shift);
+
+   return closePrice > openPrice;
+}
+
+//+------------------------------------------------------------------+
+//| Sprawdzenie, czy świeca jest spadkowa                            |
+//+------------------------------------------------------------------+
+bool IsBearish(int shift)
+{
+   double openPrice  = iOpen(_Symbol, _Period, shift);
+   double closePrice = iClose(_Symbol, _Period, shift);
+
+   return closePrice < openPrice;
+}
+
+//+------------------------------------------------------------------+
+//| Znalezienie ostatniej wcześniejszej świecy wzrostowej            |
+//+------------------------------------------------------------------+
+int FindLastBullishCandle()
+{
+   // Zaczynamy od shift 2, ponieważ shift 1 to świeca sygnałowa
+   for(int shift = 2; shift <= MaxSearchCandles; shift++)
+   {
+      if(IsBullish(shift))
+         return shift;
+   }
+
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+//| Znalezienie ostatniej wcześniejszej świecy spadkowej             |
+//+------------------------------------------------------------------+
+int FindLastBearishCandle()
+{
+   // Zaczynamy od shift 2, ponieważ shift 1 to świeca sygnałowa
+   for(int shift = 2; shift <= MaxSearchCandles; shift++)
+   {
+      if(IsBearish(shift))
+         return shift;
+   }
+
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+//| Sprawdzenie, czy EA ma już pozycję na tym symbolu                |
+//+------------------------------------------------------------------+
+bool HasOpenPosition()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+
+      if(ticket == 0)
+         continue;
+
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      ulong magic   = (ulong)PositionGetInteger(POSITION_MAGIC);
+
+      if(symbol == _Symbol && magic == MagicNumber)
+         return true;
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Sprawdzenie minimalnej odległości SL i TP                        |
+//+------------------------------------------------------------------+
+bool CheckStopsDistance(double entryPrice, double sl, double tp)
+{
+   int stopsLevelPoints =
+      (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double minimumDistance = stopsLevelPoints * point;
+
+   if(minimumDistance <= 0)
+      return true;
+
+   double slDistance = MathAbs(entryPrice - sl);
+   double tpDistance = MathAbs(entryPrice - tp);
+
+   if(slDistance < minimumDistance)
+   {
+      Print("SL jest za blisko ceny. Minimalna odległość: ",
+            minimumDistance);
+
+      return false;
+   }
+
+   if(tpDistance < minimumDistance)
+   {
+      Print("TP jest za blisko ceny. Minimalna odległość: ",
+            minimumDistance);
+
+      return false;
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Otwarcie BUY                                                     |
+//+------------------------------------------------------------------+
+void OpenBuy()
+{
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double pip = PipSize();
+
+   double sl = ask - StopLossPips * pip;
+   double tp = ask + TakeProfitPips * pip;
+
+   sl = NormalizePrice(sl);
+   tp = NormalizePrice(tp);
+
+   if(!CheckStopsDistance(ask, sl, tp))
+      return;
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(SlippagePoints);
+
+   if(trade.Buy(
+      Lots,
+      _Symbol,
+      0.0,
+      sl,
+      tp,
+      "BUY candle break"
+   ))
+   {
+      Print(
+         "Otwarto BUY. Cena: ", ask,
+         ", SL: ", sl,
+         ", TP: ", tp
+      );
+   }
+   else
+   {
+      Print(
+         "Błąd otwarcia BUY. Kod: ",
+         trade.ResultRetcode(),
+         ", opis: ",
+         trade.ResultRetcodeDescription()
+      );
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Otwarcie SELL                                                    |
+//+------------------------------------------------------------------+
+void OpenSell()
+{
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double pip = PipSize();
+
+   double sl = bid + StopLossPips * pip;
+   double tp = bid - TakeProfitPips * pip;
+
+   sl = NormalizePrice(sl);
+   tp = NormalizePrice(tp);
+
+   if(!CheckStopsDistance(bid, sl, tp))
+      return;
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(SlippagePoints);
+
+   if(trade.Sell(
+      Lots,
+      _Symbol,
+      0.0,
+      sl,
+      tp,
+      "SELL candle break"
+   ))
+   {
+      Print(
+         "Otwarto SELL. Cena: ", bid,
+         ", SL: ", sl,
+         ", TP: ", tp
+      );
+   }
+   else
+   {
+      Print(
+         "Błąd otwarcia SELL. Kod: ",
+         trade.ResultRetcode(),
+         ", opis: ",
+         trade.ResultRetcodeDescription()
+      );
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Sprawdzanie sygnału                                              |
+//+------------------------------------------------------------------+
+void CheckSignal()
+{
+   if(Bars(_Symbol, _Period) < MaxSearchCandles + 5)
+      return;
+
+   if(OnePositionOnly && HasOpenPosition())
+   {
+      Print("Sygnał pominięty: istnieje już otwarta pozycja.");
+      return;
+   }
+
+   // Shift 1 to ostatnia zamknięta świeca
+   double signalClose = iClose(_Symbol, _Period, 1);
+
+   //--- Sygnał BUY
+   if(IsBullish(1))
+   {
+      int bearishShift = FindLastBearishCandle();
+
+      if(bearishShift != -1)
+      {
+         double bearishHigh =
+            iHigh(_Symbol, _Period, bearishShift);
+
+         Print(
+            "Sprawdzanie BUY. Close świecy sygnałowej: ",
+            signalClose,
+            ", High ostatniej świecy spadkowej: ",
+            bearishHigh,
+            ", shift: ",
+            bearishShift
+         );
+
+         if(signalClose > bearishHigh)
+         {
+            Print("SYGNAŁ BUY: świeca zamknęła się powyżej High.");
+
+            OpenBuy();
+            return;
+         }
+      }
+   }
+
+   //--- Sygnał SELL
+   if(IsBearish(1))
+   {
+      int bullishShift = FindLastBullishCandle();
+
+      if(bullishShift != -1)
+      {
+         double bullishLow =
+            iLow(_Symbol, _Period, bullishShift);
+
+         Print(
+            "Sprawdzanie SELL. Close świecy sygnałowej: ",
+            signalClose,
+            ", Low ostatniej świecy wzrostowej: ",
+            bullishLow,
+            ", shift: ",
+            bullishShift
+         );
+
+         if(signalClose < bullishLow)
+         {
+            Print("SYGNAŁ SELL: świeca zamknęła się poniżej Low.");
+
+            OpenSell();
+            return;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Inicjalizacja EA                                                 |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(SlippagePoints);
+
+   lastBarTime = iTime(_Symbol, _Period, 0);
+
+   Print(
+      "EA uruchomiony. Symbol: ",
+      _Symbol,
+      ", interwał: ",
+      EnumToString(_Period),
+      ", wielkość pipsa: ",
+      PipSize()
+   );
+
+   return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Główna funkcja                                                   |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   datetime currentBarTime = iTime(_Symbol, _Period, 0);
+
+   if(currentBarTime == 0)
+      return;
+
+   // Sprawdzamy tylko raz po rozpoczęciu nowej świecy
+   if(currentBarTime != lastBarTime)
+   {
+      lastBarTime = currentBarTime;
+      CheckSignal();
+   }
+}
+//+------------------------------------------------------------------+
