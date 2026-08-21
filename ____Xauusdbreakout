@@ -38,6 +38,17 @@ input ENUM_APPLIED_PRICE InpExitMAAppliedPrice  = PRICE_CLOSE; // Exit MA Applie
 input int                InpExitMAShift         = 0;           // Exit MA shift
 
 //
+// Trend filter - dodatkowy filtr kierunku pozycji
+// BUY tylko gdy Filter Fast EMA > Filter Slow EMA
+// SELL tylko gdy Filter Fast EMA < Filter Slow EMA
+//
+input bool               InpUseTrendFilter          = true;        // Wlacz filtr EMA 40/104
+input int                InpFilterFastMABars        = 40;          // Szybsza EMA filtra
+input int                InpFilterSlowMABars        = 104;         // Wolniejsza EMA filtra
+input ENUM_MA_METHOD     InpFilterMAMethod          = MODE_EMA;    // Metoda obu MA filtra
+input ENUM_APPLIED_PRICE InpFilterMAAppliedPrice    = PRICE_CLOSE; // Cena obu MA filtra
+
+//
 //	The basic expert uses fixed take profit, stop loss and order size
 //
 input double             InpOrderSize          = 0.1;  // Order size in lots
@@ -197,6 +208,10 @@ int           SlowHandle;
 double        SlowBuffer[];
 int           ExitHandle;
 double        ExitBuffer[];
+int           FilterFastHandle;
+double        FilterFastBuffer[];
+int           FilterSlowHandle;
+double        FilterSlowBuffer[];
 
 // Sygnał z przecięcia:
 //  0 = brak
@@ -231,7 +246,15 @@ int OnInit() {
    ExitHandle = iMA( Symbol(), Period(), InpExitMABars, 0, InpExitMAMethod, InpExitMAAppliedPrice );
    ArraySetAsSeries( ExitBuffer, true );
 
-   if ( FastHandle == INVALID_HANDLE || SlowHandle == INVALID_HANDLE || ExitHandle == INVALID_HANDLE ) {
+   // Dwie dodatkowe srednie uzywane tylko jako filtr kierunku wejscia.
+   FilterFastHandle = iMA( Symbol(), Period(), InpFilterFastMABars, 0, InpFilterMAMethod, InpFilterMAAppliedPrice );
+   ArraySetAsSeries( FilterFastBuffer, true );
+
+   FilterSlowHandle = iMA( Symbol(), Period(), InpFilterSlowMABars, 0, InpFilterMAMethod, InpFilterMAAppliedPrice );
+   ArraySetAsSeries( FilterSlowBuffer, true );
+
+   if ( FastHandle == INVALID_HANDLE || SlowHandle == INVALID_HANDLE || ExitHandle == INVALID_HANDLE ||
+        FilterFastHandle == INVALID_HANDLE || FilterSlowHandle == INVALID_HANDLE ) {
       Print( "Error creating handles to moving averages" );
       return INIT_FAILED;
    }
@@ -247,6 +270,8 @@ void OnDeinit( const int reason ) {
    IndicatorRelease( FastHandle );
    IndicatorRelease( SlowHandle );
    IndicatorRelease( ExitHandle );
+   IndicatorRelease( FilterFastHandle );
+   IndicatorRelease( FilterSlowHandle );
 }
 
 void OnTick() {
@@ -292,8 +317,18 @@ void OnTick() {
          return;
       }
 
-      // Fast przecina Slow od dolu -> uzbroj BUY i wyzeruj licznik wejsc dla NOWEGO przeciecia.
-      if ( ( FastBuffer[1] > SlowBuffer[1] ) && !( FastBuffer[2] > SlowBuffer[2] ) ) {
+      // Pobierz dodatkowe EMA filtra. Na przecieciu sprawdzamy zamknieta swiece [1].
+      if ( CopyBuffer( FilterFastHandle, 0, 0, 3, FilterFastBuffer ) < 3 ||
+           CopyBuffer( FilterSlowHandle, 0, 0, 3, FilterSlowBuffer ) < 3 ) {
+         Print( "Insufficient results from trend filter MA" );
+         return;
+      }
+
+      bool buyFilterOK  = ( !InpUseTrendFilter || FilterFastBuffer[1] > FilterSlowBuffer[1] );
+      bool sellFilterOK = ( !InpUseTrendFilter || FilterFastBuffer[1] < FilterSlowBuffer[1] );
+
+      // Fast przecina Slow od dolu -> BUY tylko gdy filtr EMA 40 > EMA 104.
+      if ( ( FastBuffer[1] > SlowBuffer[1] ) && !( FastBuffer[2] > SlowBuffer[2] ) && buyFilterOK ) {
          PendingSignal = 1;
          PendingCrossBarTime = iTime( Symbol(), Period(), 1 );
          TradesOpenedForCurrentCross = 0;
@@ -301,14 +336,30 @@ void OnTick() {
                 ". SL = Slow MA - ", DoubleToString( InpInitialSLOffsetPips, 1 ), " pips. Czekam az odleglosc SL bedzie <= ",
                 DoubleToString( InpMaxSLPipsAtEntry, 1 ), " pips." );
       }
-      // Fast przecina Slow od gory -> uzbroj SELL i wyzeruj licznik wejsc dla NOWEGO przeciecia.
-      else if ( ( FastBuffer[1] < SlowBuffer[1] ) && !( FastBuffer[2] < SlowBuffer[2] ) ) {
+      // Fast przecina Slow od gory -> SELL tylko gdy filtr EMA 40 < EMA 104.
+      else if ( ( FastBuffer[1] < SlowBuffer[1] ) && !( FastBuffer[2] < SlowBuffer[2] ) && sellFilterOK ) {
          PendingSignal = -1;
          PendingCrossBarTime = iTime( Symbol(), Period(), 1 );
          TradesOpenedForCurrentCross = 0;
          Print( "SIGNAL SELL: przeciecie wykryte. Maks. wejsc z tego przeciecia = ", InpMaxTradesPerCross,
                 ". SL = Slow MA + ", DoubleToString( InpInitialSLOffsetPips, 1 ), " pips. Czekam az odleglosc SL bedzie <= ",
                 DoubleToString( InpMaxSLPipsAtEntry, 1 ), " pips." );
+      }
+      // Przeciecie BUY bylo, ale filtr trendu je blokuje. Nie uzbrajamy sygnalu.
+      else if ( ( FastBuffer[1] > SlowBuffer[1] ) && !( FastBuffer[2] > SlowBuffer[2] ) && !buyFilterOK ) {
+         PendingSignal = 0;
+         PendingCrossBarTime = 0;
+         TradesOpenedForCurrentCross = 0;
+         PrintFormat( "BLOCK BUY: EMA %d = %f nie jest nad EMA %d = %f",
+                      InpFilterFastMABars, FilterFastBuffer[1], InpFilterSlowMABars, FilterSlowBuffer[1] );
+      }
+      // Przeciecie SELL bylo, ale filtr trendu je blokuje. Nie uzbrajamy sygnalu.
+      else if ( ( FastBuffer[1] < SlowBuffer[1] ) && !( FastBuffer[2] < SlowBuffer[2] ) && !sellFilterOK ) {
+         PendingSignal = 0;
+         PendingCrossBarTime = 0;
+         TradesOpenedForCurrentCross = 0;
+         PrintFormat( "BLOCK SELL: EMA %d = %f nie jest pod EMA %d = %f",
+                      InpFilterFastMABars, FilterFastBuffer[1], InpFilterSlowMABars, FilterSlowBuffer[1] );
       }
       else {
          // Jesli oczekiwalismy BUY, ale Fast nie jest juz nad Slow, anuluj.
@@ -397,6 +448,33 @@ bool GetCurrentSLData( ENUM_ORDER_TYPE type, double &price, double &sl, double &
 }
 
 
+// Sprawdza filtr trendu bezposrednio przed otwarciem pozycji.
+// BUY  -> EMA filtra szybka musi byc nad EMA filtra wolna.
+// SELL -> EMA filtra szybka musi byc pod EMA filtra wolna.
+bool IsTrendFilterOK( ENUM_ORDER_TYPE type ) {
+
+   if ( !InpUseTrendFilter )
+      return true;
+
+   double filterFastNow[1];
+   double filterSlowNow[1];
+
+   if ( CopyBuffer( FilterFastHandle, 0, 0, 1, filterFastNow ) < 1 ||
+        CopyBuffer( FilterSlowHandle, 0, 0, 1, filterSlowNow ) < 1 ) {
+      Print( "Nie udalo sie pobrac EMA filtra trendu." );
+      return false;
+   }
+
+   if ( type == ORDER_TYPE_BUY )
+      return ( filterFastNow[0] > filterSlowNow[0] );
+
+   if ( type == ORDER_TYPE_SELL )
+      return ( filterFastNow[0] < filterSlowNow[0] );
+
+   return false;
+}
+
+
 // Po przecieciu NIE otwiera od razu.
 // Czeka, az odleglosc ceny od SL = Slow MA +/- InpInitialSLOffsetPips spadnie do limitu InpMaxSLPipsAtEntry.
 void TryOpenPendingSignal() {
@@ -414,6 +492,10 @@ void TryOpenPendingSignal() {
    }
 
    ENUM_ORDER_TYPE type = ( PendingSignal == 1 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL );
+
+   // Filtr musi nadal byc poprawny w chwili faktycznego wejscia.
+   if ( !IsTrendFilterOK( type ) )
+      return;
 
    double price;
    double sl;
