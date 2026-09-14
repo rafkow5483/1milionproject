@@ -1,537 +1,482 @@
 //+------------------------------------------------------------------+
-//|   MA_Pullback_BuySellStop_OnePerCross.mq5                        |
-//|   BUY = lustrzane odbicie SELL                                   |
-//|   SELL: cross-down, cofka w górę ≥ X pips -> SELL STOP na dołku  |
-//|   BUY : cross-up,   cofka w dół ≥ X pips -> BUY  STOP na szczycie|
-//|   Dodano: limit maks. spreadu + strażnik oczekujących            |
+//|                EMA 8/21 Multi Retrace EA                         |
+//|                                                                  |
+//| SELL: EMA8 crosses below EMA21                                   |
+//|       new LOW -> retrace X pips -> SELL                          |
+//|                                                                  |
+//| BUY:  EMA8 crosses above EMA21                                   |
+//|       new HIGH -> retrace X pips -> BUY                          |
 //+------------------------------------------------------------------+
 #property strict
+
 #include <Trade/Trade.mqh>
+
 CTrade trade;
 
-//=========================== Parametry =============================//
-input ENUM_MA_METHOD InpMaMethod        = MODE_SMA; // EMA/SMA/SMMA/LWMA
-input int            InpFastPeriod      = 2;        // szybka MA
-input int            InpSlowPeriod      = 10;       // wolna MA
-input int            InpPullbackPips    = 100;        // min cofka (pipsy)
-input double         InpLots            = 0.10;     // wolumen
-input int            InpSL_Pips         = 200;        // SL (pipsy; 0 = brak)
-input int            InpTP_Pips         = 100;        // TP (pipsy; 0 = brak)
-input double         InpBreakLowPips    = -100;      // przebicie Low dla SELL STOP
-input double         InpBreakHighPips   = -100;      // przebicie High dla BUY  STOP
-input int            InpExpireMinutes   = 6;      // wygaśnięcie oczekujących (0=GTC)
-input long           InpMagic           = 20250810; // magic
-input int            InpSlippagePts     = 12;       // maks. odchylenie (punkty)
-input bool           InpOnePosPerCross  = false;     // jedna pozycja na przecięcie
-input int            InpSwingLookback   = 5;       // ile ostatnich świec do wyznaczenia high/low
-input bool InpUsePullbackFilter = true; // używać filtra cofki (true/false)
+//====================================================================
+// INPUTS
+//====================================================================
 
-// --- Nowe: kontrola spreadu ---
-input double         InpMaxSpreadPips   = 12.0;      // maks. spread (pipsy; 0 = brak limitu)
-input bool           InpGuardPendingsBySpread = true; // usuń oczekujące gdy spread > limit
+input double Lots             = 0.01;
 
-// tryb kierunku
-enum DirectionMode { SELL_ONLY=0, BUY_ONLY=1, BOTH=2 };
-input DirectionMode  InpDirection       = BOTH;     // które kierunki aktywne
+input int    FastEMAPeriod    = 8;
+input int    SlowEMAPeriod    = 21;
 
-//=========================== Zmienne stanu =========================//
-int      fastHandle=-1, slowHandle=-1;
+input double RetracePips      = 100.0;
+input double StopLossPips     = 100.0;
+input double TakeProfitPips   = 100.0;
 
-// czasy potwierdzonych przecięć
-datetime lastCrossDownTime=0;
-datetime lastCrossUpTime=0;
+input ulong  MagicNumber      = 111;
 
-// SELL stan
-bool     sellArmed=false;         // po cross-down: szukamy cofki w górę
-double   swingLow=0.0;            // dołek poprzedzający cofkę
-bool     pullbackSeenSell=false;  // cofka ≥ X pips dla SELL?
-ulong    pendingSellTicket=0;     // ticket SELL STOP
-bool     tradedThisCrossDown=false; // JEDNA pozycja dla danego cross-down
+// 0.0 = automatyczne wyliczenie wielkości pipsa
+// Przykład:
+// EURUSD 5 cyfr -> 0.0001
+// XAUUSD 2/3 cyfry -> zwykle 0.01
+//
+// Jeżeli Twój broker inaczej liczy XAUUSD,
+// możesz wpisać tutaj np. 0.01 / 0.1 / 1.0
+input double CustomPipSize    = 0.0;
 
-// BUY stan
-bool     buyArmed=false;          // po cross-up: szukamy cofki w dół
-double   swingHigh=0.0;           // szczyt poprzedzający cofkę
-bool     pullbackSeenBuy=false;   // cofka ≥ X pips dla BUY?
-ulong    pendingBuyTicket=0;      // ticket BUY STOP
-bool     tradedThisCrossUp=false; // JEDNA pozycja dla danego cross-up
+//====================================================================
+// GLOBAL VARIABLES
+//====================================================================
 
-//=========================== Pomocnicze ============================//
-double Pip(){ return (_Digits==3 || _Digits==5) ? 10.0*_Point : _Point; }
-double N(double p){ return NormalizeDouble(p,_Digits); }
-double SpreadPips()
+int fastEMAHandle = INVALID_HANDLE;
+int slowEMAHandle = INVALID_HANDLE;
+
+enum TradeMode
 {
-   double b=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-   double a=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-   return (a-b)/Pip();
+   MODE_NONE = 0,
+   MODE_SELL = 1,
+   MODE_BUY  = 2
+};
+
+TradeMode currentMode = MODE_NONE;
+
+// SELL
+double sellLow = 0.0;
+bool sellEntryAvailable = false;
+
+// BUY
+double buyHigh = 0.0;
+bool buyEntryAvailable = false;
+
+datetime lastBarTime = 0;
+
+//====================================================================
+// PIP SIZE
+//====================================================================
+
+double GetPipSize()
+{
+   if(CustomPipSize > 0.0)
+      return CustomPipSize;
+
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+   // Standard FX:
+   // EURUSD 1.12345 -> pip = 0.0001
+   // USDJPY 123.456 -> pip = 0.01
+   if(digits == 3 || digits == 5)
+      return point * 10.0;
+
+   return point;
 }
 
-bool SpreadOK()
+//====================================================================
+// NORMALIZE PRICE
+//====================================================================
+
+double NormalizePrice(double price)
 {
-   if(InpMaxSpreadPips<=0.0) return true;
-   double sp = SpreadPips();
-   if(sp <= InpMaxSpreadPips) return true;
-   PrintFormat("Spread %.1f pips > limit %.1f pips — wstrzymuję działanie.",
-               sp, InpMaxSpreadPips);
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   return NormalizeDouble(price, digits);
+}
+
+//====================================================================
+// NEW BAR
+//====================================================================
+
+bool IsNewBar()
+{
+   datetime currentBarTime = iTime(_Symbol, _Period, 0);
+
+   if(currentBarTime != lastBarTime)
+   {
+      lastBarTime = currentBarTime;
+      return true;
+   }
+
    return false;
 }
 
-bool PrepareMAs()
-{
-   if(fastHandle==-1)
-      fastHandle=iMA(_Symbol,PERIOD_CURRENT,InpFastPeriod,0,InpMaMethod,PRICE_CLOSE);
-   if(slowHandle==-1)
-      slowHandle=iMA(_Symbol,PERIOD_CURRENT,InpSlowPeriod,0,InpMaMethod,PRICE_CLOSE);
-   return (fastHandle!=INVALID_HANDLE && slowHandle!=INVALID_HANDLE);
-}
+//====================================================================
+// CHECK EMA CROSS
+//====================================================================
 
-bool ReadMA(int shift,double &f,double &s)
+void CheckEMACross()
 {
-   if(!PrepareMAs()) return false;
-   double fb[3], sb[3];
-   if(CopyBuffer(fastHandle,0,shift,3,fb)<3) return false;
-   if(CopyBuffer(slowHandle,0,shift,3,sb)<3) return false;
-   f=fb[0]; s=sb[0]; return true;
-}
+   double fastBuffer[3];
+   double slowBuffer[3];
 
-bool CrossDownConfirmed(datetime &barTime)
-{
-   double f2,s2,f1,s1;
-   if(!ReadMA(2,f2,s2) || !ReadMA(1,f1,s1)) return false;
-   if(f2> s2 && f1< s1)
+   if(CopyBuffer(fastEMAHandle, 0, 0, 3, fastBuffer) < 3)
+      return;
+
+   if(CopyBuffer(slowEMAHandle, 0, 0, 3, slowBuffer) < 3)
+      return;
+
+   // Przy CopyBuffer do zwykłej tablicy:
+   // [0] = świeca 2
+   // [1] = świeca 1 - ostatnia zamknięta
+   // [2] = świeca 0 - aktualna
+
+   double fast2 = fastBuffer[0];
+   double fast1 = fastBuffer[1];
+
+   double slow2 = slowBuffer[0];
+   double slow1 = slowBuffer[1];
+
+   //==============================================================
+   // EMA8 PRZECINA EMA21 W DÓŁ -> SELL
+   //==============================================================
+
+   if(fast2 >= slow2 && fast1 < slow1)
    {
-      MqlRates r[]; if(CopyRates(_Symbol,PERIOD_CURRENT,1,1,r)==1){ barTime=r[0].time; return true; }
+      currentMode = MODE_SELL;
+
+      sellLow = iLow(_Symbol, _Period, 1);
+
+      sellEntryAvailable = true;
+
+      buyEntryAvailable = false;
+      buyHigh = 0.0;
+
+      Print("--------------------------------------------------");
+      Print("EMA8 przecięła EMA21 W DÓŁ");
+      Print("TRYB SELL AKTYWNY");
+      Print("Startowe LOW = ", sellLow);
+      Print("--------------------------------------------------");
+
+      return;
    }
+
+   //==============================================================
+   // EMA8 PRZECINA EMA21 W GÓRĘ -> BUY
+   //==============================================================
+
+   if(fast2 <= slow2 && fast1 > slow1)
+   {
+      currentMode = MODE_BUY;
+
+      buyHigh = iHigh(_Symbol, _Period, 1);
+
+      buyEntryAvailable = true;
+
+      sellEntryAvailable = false;
+      sellLow = 0.0;
+
+      Print("--------------------------------------------------");
+      Print("EMA8 przecięła EMA21 W GÓRĘ");
+      Print("TRYB BUY AKTYWNY");
+      Print("Startowe HIGH = ", buyHigh);
+      Print("--------------------------------------------------");
+
+      return;
+   }
+}
+
+//====================================================================
+// OPEN SELL
+//====================================================================
+
+bool OpenSell()
+{
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   if(bid <= 0)
+      return false;
+
+   double pip = GetPipSize();
+
+   double sl = bid + StopLossPips * pip;
+   double tp = bid - TakeProfitPips * pip;
+
+   sl = NormalizePrice(sl);
+   tp = NormalizePrice(tp);
+
+   trade.SetExpertMagicNumber(MagicNumber);
+
+   bool result = trade.Sell(
+      Lots,
+      _Symbol,
+      0.0,
+      sl,
+      tp,
+      "EMA8/21 Retrace SELL"
+   );
+
+   if(result)
+   {
+      Print("==================================================");
+      Print("SELL OTWARTY");
+      Print("Cena: ", bid);
+      Print("Low odniesienia: ", sellLow);
+      Print("SL: ", sl);
+      Print("TP: ", tp);
+      Print("==================================================");
+
+      return true;
+   }
+
+   Print("BŁĄD SELL: ",
+         trade.ResultRetcode(),
+         " ",
+         trade.ResultRetcodeDescription());
+
    return false;
 }
 
-bool CrossUpConfirmed(datetime &barTime)
+//====================================================================
+// OPEN BUY
+//====================================================================
+
+bool OpenBuy()
 {
-   double f2,s2,f1,s1;
-   if(!ReadMA(2,f2,s2) || !ReadMA(1,f1,s1)) return false;
-   if(f2< s2 && f1> s1)
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   if(ask <= 0)
+      return false;
+
+   double pip = GetPipSize();
+
+   double sl = ask - StopLossPips * pip;
+   double tp = ask + TakeProfitPips * pip;
+
+   sl = NormalizePrice(sl);
+   tp = NormalizePrice(tp);
+
+   trade.SetExpertMagicNumber(MagicNumber);
+
+   bool result = trade.Buy(
+      Lots,
+      _Symbol,
+      0.0,
+      sl,
+      tp,
+      "EMA8/21 Retrace BUY"
+   );
+
+   if(result)
    {
-      MqlRates r[]; if(CopyRates(_Symbol,PERIOD_CURRENT,1,1,r)==1){ barTime=r[0].time; return true; }
+      Print("==================================================");
+      Print("BUY OTWARTY");
+      Print("Cena: ", ask);
+      Print("High odniesienia: ", buyHigh);
+      Print("SL: ", sl);
+      Print("TP: ", tp);
+      Print("==================================================");
+
+      return true;
    }
+
+   Print("BŁĄD BUY: ",
+         trade.ResultRetcode(),
+         " ",
+         trade.ResultRetcodeDescription());
+
    return false;
 }
 
-void ResetAllState(bool keepCrossTimes=false)
-{
-   // SELL
-   sellArmed=false; swingLow=0.0; pullbackSeenSell=false; pendingSellTicket=0;
-   if(!keepCrossTimes) lastCrossDownTime=0;
-   tradedThisCrossDown=false;
+//====================================================================
+// SELL LOGIC
+//====================================================================
 
-   // BUY
-   buyArmed=false; swingHigh=0.0; pullbackSeenBuy=false; pendingBuyTicket=0;
-   if(!keepCrossTimes) lastCrossUpTime=0;
-   tradedThisCrossUp=false;
-}
-
-void CancelOurPendings()
+void ProcessSell()
 {
-   for(int i=OrdersTotal()-1;i>=0;--i)
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   if(bid <= 0)
+      return;
+
+   double pip = GetPipSize();
+
+   //==============================================================
+   // NOWE LOW
+   //==============================================================
+
+   if(sellLow == 0.0 || bid < sellLow)
    {
-      ulong t=OrderGetTicket(i); if(!t) continue;
-      if(!OrderSelect(t)) continue;
-      if(OrderGetInteger(ORDER_MAGIC)!=InpMagic) continue;
+      sellLow = bid;
 
-      ENUM_ORDER_TYPE typ=(ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
-      if(typ==ORDER_TYPE_SELL_STOP || typ==ORDER_TYPE_BUY_STOP)
-         trade.OrderDelete(t);
+      // Każde nowe low daje NOWĄ możliwość pozycji
+      sellEntryAvailable = true;
+
+      Print("Nowe SELL LOW: ", sellLow);
    }
-   pendingSellTicket=0;
-   pendingBuyTicket=0;
-}
 
-//---------------------- Składanie SELL STOP ------------------------//
-bool PlaceSellStopAtSwingLow()
-{
-   if(InpOnePosPerCross && tradedThisCrossDown) return false;
+   //==============================================================
+   // RETRACE
+   //==============================================================
 
-   // kontrola spreadu przed złożeniem
-   if(!SpreadOK()) return false;
+   if(!sellEntryAvailable)
+      return;
 
-   double pp=Pip();
-   double price = N(swingLow - InpBreakLowPips*pp);
-   double sl=0.0, tp=0.0;
-   if(InpSL_Pips>0) sl=N(price + InpSL_Pips*pp);
-   if(InpTP_Pips>0) tp=N(price - InpTP_Pips*pp);
-   datetime exp=(InpExpireMinutes>0)?(TimeCurrent()+InpExpireMinutes*60):0;
+   double retraceLevel = sellLow + RetracePips * pip;
 
-   trade.SetExpertMagicNumber(InpMagic);
-   trade.SetDeviationInPoints(InpSlippagePts);
-
-   bool ok=trade.SellStop(InpLots,price,_Symbol,sl,tp,(exp>0?ORDER_TIME_SPECIFIED:ORDER_TIME_GTC),exp);
-   if(ok){
-      pendingSellTicket=trade.ResultOrder();
-      PrintFormat("SELL STOP ok: price=%.5f sl=%.5f tp=%.5f (swingLow=%.5f)",
-                  price,sl,tp,swingLow);
-   }else{
-      PrintFormat("SELL STOP błąd: ret=%d (%s)", (int)trade.ResultRetcode(),
-                  trade.ResultRetcodeDescription());
-   }
-   return ok;
-}
-
-//---------------------- Składanie BUY STOP -------------------------//
-bool PlaceBuyStopAtSwingHigh()
-{
-   if(InpOnePosPerCross && tradedThisCrossUp) return false;
-
-   // kontrola spreadu przed złożeniem
-   if(!SpreadOK()) return false;
-
-   double pp=Pip();
-   double price = N(swingHigh + InpBreakHighPips*pp);
-   double sl=0.0, tp=0.0;
-   if(InpSL_Pips>0) sl=N(price - InpSL_Pips*pp);
-   if(InpTP_Pips>0) tp=N(price + InpTP_Pips*pp);
-   datetime exp=(InpExpireMinutes>0)?(TimeCurrent()+InpExpireMinutes*60):0;
-
-   trade.SetExpertMagicNumber(InpMagic);
-   trade.SetDeviationInPoints(InpSlippagePts);
-
-   bool ok=trade.BuyStop(InpLots,price,_Symbol,sl,tp,(exp>0?ORDER_TIME_SPECIFIED:ORDER_TIME_GTC),exp);
-   if(ok){
-      pendingBuyTicket=trade.ResultOrder();
-      PrintFormat("BUY  STOP ok: price=%.5f sl=%.5f tp=%.5f (swingHigh=%.5f)",
-                  price,sl,tp,swingHigh);
-   }else{
-      PrintFormat("BUY  STOP błąd: ret=%d (%s)", (int)trade.ResultRetcode(),
-                  trade.ResultRetcodeDescription());
-   }
-   return ok;
-}
-//---------------------- Najniższy Low z ostatnich N świec ---------//
-double LowestLow(int barsBack)
-{
-   if(barsBack <= 0) return 0.0;
-
-   MqlRates r[];
-   int copied = CopyRates(_Symbol, PERIOD_CURRENT, 1, barsBack, r); // od świecy 1 (zamknięta)
-   if(copied <= 0) return 0.0;
-
-   double low = r[0].low;
-   for(int i = 1; i < copied; i++)
+   if(bid >= retraceLevel)
    {
-      if(r[i].low < low)
-         low = r[i].low;
+      Print("SELL retrace osiągnięty.");
+      Print("Low = ", sellLow);
+      Print("Poziom wejścia = ", retraceLevel);
+      Print("Aktualna cena = ", bid);
+
+      if(OpenSell())
+      {
+         // Z tego konkretnego LOW już weszliśmy.
+         // Następna pozycja wymaga NOWEGO LOW.
+         sellEntryAvailable = false;
+      }
    }
-   return low;
 }
 
-//---------------------- Najwyższy High z ostatnich N świec --------//
-double HighestHigh(int barsBack)
+//====================================================================
+// BUY LOGIC
+//====================================================================
+
+void ProcessBuy()
 {
-   if(barsBack <= 0) return 0.0;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   MqlRates r[];
-   int copied = CopyRates(_Symbol, PERIOD_CURRENT, 1, barsBack, r);
-   if(copied <= 0) return 0.0;
+   if(bid <= 0)
+      return;
 
-   double high = r[0].high;
-   for(int i = 1; i < copied; i++)
+   double pip = GetPipSize();
+
+   //==============================================================
+   // NOWE HIGH
+   //==============================================================
+
+   if(buyHigh == 0.0 || bid > buyHigh)
    {
-      if(r[i].high > high)
-         high = r[i].high;
+      buyHigh = bid;
+
+      // Każde nowe high daje NOWĄ możliwość pozycji
+      buyEntryAvailable = true;
+
+      Print("Nowe BUY HIGH: ", buyHigh);
    }
-   return high;
+
+   //==============================================================
+   // RETRACE
+   //==============================================================
+
+   if(!buyEntryAvailable)
+      return;
+
+   double retraceLevel = buyHigh - RetracePips * pip;
+
+   if(bid <= retraceLevel)
+   {
+      Print("BUY retrace osiągnięty.");
+      Print("High = ", buyHigh);
+      Print("Poziom wejścia = ", retraceLevel);
+      Print("Aktualna cena = ", bid);
+
+      if(OpenBuy())
+      {
+         // Z tego konkretnego HIGH już weszliśmy.
+         // Następna pozycja wymaga NOWEGO HIGH.
+         buyEntryAvailable = false;
+      }
+   }
 }
-//---------------------- Najniższe CLOSE z ostatnich N świec ---------//
-double LowestClose(int barsBack)
+
+//====================================================================
+// INIT
+//====================================================================
+
+int OnInit()
 {
-   if(barsBack <= 0) return 0.0;
+   trade.SetExpertMagicNumber(MagicNumber);
 
-   MqlRates r[];
-   int copied = CopyRates(_Symbol, PERIOD_CURRENT, 1, barsBack, r); // od świecy 1 (zamknięta)
-   if(copied <= 0) return 0.0;
+   fastEMAHandle = iMA(
+      _Symbol,
+      _Period,
+      FastEMAPeriod,
+      0,
+      MODE_EMA,
+      PRICE_CLOSE
+   );
 
-   double price = r[0].close;
-   for(int i = 1; i < copied; i++)
+   slowEMAHandle = iMA(
+      _Symbol,
+      _Period,
+      SlowEMAPeriod,
+      0,
+      MODE_EMA,
+      PRICE_CLOSE
+   );
+
+   if(fastEMAHandle == INVALID_HANDLE ||
+      slowEMAHandle == INVALID_HANDLE)
    {
-      if(r[i].close < price)
-         price = r[i].close;
+      Print("Błąd tworzenia EMA.");
+      return INIT_FAILED;
    }
-   return price;
+
+   lastBarTime = iTime(_Symbol, _Period, 0);
+
+   Print("EA uruchomiony.");
+   Print("EMA ", FastEMAPeriod, " / EMA ", SlowEMAPeriod);
+   Print("Retrace: ", RetracePips, " pips");
+   Print("SL: ", StopLossPips, " pips");
+   Print("TP: ", TakeProfitPips, " pips");
+   Print("Pip size: ", GetPipSize());
+
+   return INIT_SUCCEEDED;
 }
 
-//---------------------- Najwyższe CLOSE z ostatnich N świec --------//
-double HighestClose(int barsBack)
+//====================================================================
+// DEINIT
+//====================================================================
+
+void OnDeinit(const int reason)
 {
-   if(barsBack <= 0) return 0.0;
+   if(fastEMAHandle != INVALID_HANDLE)
+      IndicatorRelease(fastEMAHandle);
 
-   MqlRates r[];
-   int copied = CopyRates(_Symbol, PERIOD_CURRENT, 1, barsBack, r);
-   if(copied <= 0) return 0.0;
-
-   double price = r[0].close;
-   for(int i = 1; i < copied; i++)
-   {
-      if(r[i].close > price)
-         price = r[i].close;
-   }
-   return price;
+   if(slowEMAHandle != INVALID_HANDLE)
+      IndicatorRelease(slowEMAHandle);
 }
 
-//=============================== OnInit ============================//
-int OnInit(){ ResetAllState(); return(INIT_SUCCEEDED); }
+//====================================================================
+// TICK
+//====================================================================
 
 void OnTick()
 {
-    //-----------------------------------------------------
-    // 0) Kontrola czasu handlu
-    //-----------------------------------------------------
-    bool time_ok = IsTimeToTrade();
+   // Sprawdzamy przecięcia EMA raz po zamknięciu świecy
+   if(IsNewBar())
+      CheckEMACross();
 
-    if(!time_ok)
-    {
-        if(pendingSellTicket != 0 || pendingBuyTicket != 0)
-        {
-            Print("Poza czasem handlu – kasuję wszystkie pendingi:");
-            CancelOurPendings();
-            pendingSellTicket = 0;
-            pendingBuyTicket  = 0;
-            pullbackSeenBuy   = false;
-            pullbackSeenSell  = false;
-        }
-        return;
-    }
+   //==============================================================
+   // SELL
+   //==============================================================
 
-    //-----------------------------------------------------
-    // 1) Przygotowanie MA
-    //-----------------------------------------------------
-    if(!PrepareMAs())
-        return;
+   if(currentMode == MODE_SELL)
+   {
+      ProcessSell();
+      return;
+   }
 
-    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    double pp  = Pip();
+   //==============================================================
+   // BUY
+   //==============================================================
 
-    //-----------------------------------------------------
-    // 2) Kontrola spreadu + kasowanie pendingów
-    //-----------------------------------------------------
-    if(InpMaxSpreadPips > 0.0 && InpGuardPendingsBySpread)
-    {
-        double sp = SpreadPips();
-        if(sp > InpMaxSpreadPips)
-        {
-            PrintFormat("Spread %.1f > %.1f → kasuję pendingi.", sp, InpMaxSpreadPips);
-
-            CancelOurPendings();
-            pendingSellTicket = 0;
-            pendingBuyTicket  = 0;
-            pullbackSeenBuy   = false;
-            pullbackSeenSell  = false;
-        }
-    }
-
-    //-----------------------------------------------------
-    // 2b) Wykrywanie automatycznie wygasłych pendingów
-    //-----------------------------------------------------
-    if(pendingSellTicket != 0)
-    {
-        if(!OrderSelect(pendingSellTicket))  // MT5 skasował pending (expiration)
-        {
-            Print("SELL STOP wygasł → reset.");
-            pendingSellTicket = 0;
-            pullbackSeenSell  = false;
-        }
-    }
-
-    if(pendingBuyTicket != 0)
-    {
-        if(!OrderSelect(pendingBuyTicket))  // MT5 skasował pending (expiration)
-        {
-            Print("BUY STOP wygasł → reset.");
-            pendingBuyTicket = 0;
-            pullbackSeenBuy  = false;
-        }
-    }
-
-    //-----------------------------------------------------
-    // 3) Sprawdzenie przecięć MA
-    //-----------------------------------------------------
-    datetime ctDown = 0, ctUp = 0;
-
-    // ---- CROSS DOWN ----
-    if(CrossDownConfirmed(ctDown) && ctDown != lastCrossDownTime)
-    {
-        // 🔥 Natychmiast usuń wszystko
-        CancelOurPendings();
-        pendingSellTicket = 0;
-        pendingBuyTicket  = 0;
-        pullbackSeenSell  = false;
-        pullbackSeenBuy   = false;
-
-        ResetAllState(true);
-
-        lastCrossDownTime = ctDown;
-
-        if(InpDirection != BUY_ONLY)
-            sellArmed = true;
-
-        Print("CROSS DOWN – aktywuję SELL MODE (wszystkie pendingi anulowane).");
-    }
-
-    // ---- CROSS UP ----
-    if(CrossUpConfirmed(ctUp) && ctUp != lastCrossUpTime)
-    {
-        // 🔥 Natychmiast usuń wszystko
-        CancelOurPendings();
-        pendingSellTicket = 0;
-        pendingBuyTicket  = 0;
-        pullbackSeenSell  = false;
-        pullbackSeenBuy   = false;
-
-        ResetAllState(true);
-
-        lastCrossUpTime = ctUp;
-
-        if(InpDirection != SELL_ONLY)
-            buyArmed = true;
-
-        Print("CROSS UP – aktywuję BUY MODE (wszystkie pendingi anulowane).");
-    }
-
-    //-----------------------------------------------------
-    // 4) Aktualna slow MA
-    //-----------------------------------------------------
-    double f0, s0;
-    if(!ReadMA(0, f0, s0))
-        return;
-
-    double slowMA = s0;
-
-    //-----------------------------------------------------
-    // 5) SELL – wejście po cofce do MA
-    //-----------------------------------------------------
-    if(sellArmed && !(InpOnePosPerCross && tradedThisCrossDown))
-    {
-        if(pendingSellTicket == 0)
-        {
-            if(ask >= slowMA)
-            {
-                int lookback = (InpSwingLookback > 0 ? InpSwingLookback : 15);
-                double lowN  = LowestClose(lookback);
-
-                if(lowN > 0.0)
-                {
-                    swingLow = lowN;
-
-                    double pullbackPips = (slowMA - swingLow) / pp;
-
-                    bool okToPlace = true;
-
-                    if(InpUsePullbackFilter)
-                    {
-                        if(pullbackPips < InpPullbackPips)
-                        {
-                            PrintFormat("SELL: cofka %.1f < %.1f → brak zlecenia.",
-                                        pullbackPips, (double)InpPullbackPips);
-                            okToPlace = false;
-                        }
-                    }
-
-                    if(okToPlace)
-                    {
-                        PrintFormat("SELL: powrót do MA=%.5f, swingLow=%.5f, cofka=%.1f → SELL STOP",
-                                    slowMA, swingLow, pullbackPips);
-
-                        PlaceSellStopAtSwingLow();
-                    }
-                }
-            }
-        }
-        else
-        {
-            if(!OrderSelect(pendingSellTicket))
-                pendingSellTicket = 0;
-        }
-    }
-
-    //-----------------------------------------------------
-    // 6) BUY – wejście po cofce do MA
-    //-----------------------------------------------------
-    if(buyArmed && !(InpOnePosPerCross && tradedThisCrossUp))
-    {
-        if(pendingBuyTicket == 0)
-        {
-            if(bid <= slowMA)
-            {
-                int lookback = (InpSwingLookback > 0 ? InpSwingLookback : 15);
-                double highN = HighestClose(lookback);
-
-                if(highN > 0.0)
-                {
-                    swingHigh = highN;
-
-                    double pullbackPips = (swingHigh - slowMA) / pp;
-
-                    bool okToPlace = true;
-
-                    if(InpUsePullbackFilter)
-                    {
-                        if(pullbackPips < InpPullbackPips)
-                        {
-                            PrintFormat("BUY: cofka %.1f < %.1f → brak zlecenia.",
-                                        pullbackPips, (double)InpPullbackPips);
-                            okToPlace = false;
-                        }
-                    }
-
-                    if(okToPlace)
-                    {
-                        PrintFormat("BUY: powrót do MA=%.5f, swingHigh=%.5f, cofka=%.1f → BUY STOP",
-                                    slowMA, swingHigh, pullbackPips);
-
-                        PlaceBuyStopAtSwingHigh();
-                    }
-                }
-            }
-        }
-        else
-        {
-            if(!OrderSelect(pendingBuyTicket))
-                pendingBuyTicket = 0;
-        }
-    }
-}
-
-
-//=============================== OnDeinit ===========================//
-void OnDeinit(const int reason){ /* nic */ }
-
-input bool enableTimePeriod1 = true; // Domyślnie włączone
-input bool enableTimePeriod2 = true; // Domyślnie włączone
-
-// Definicja zmiennych input dla czasów startu i końca
-input int startHour1 = 6;
-input int startMinute1 = 0;
-input int endHour1 = 13;
-input int endMinute1 = 0;
-
-input int startHour2 = 15;
-input int startMinute2 = 0;
-input int endHour2 = 22;
-input int endMinute2 = 0;
-
-
-// Funkcja sprawdzająca, czy obecny czas mieści się w określonym przedziale
-bool IsTimeToTrade() {
-    MqlDateTime time;
-    TimeToStruct(TimeCurrent(), time);
-
-    // Konwersja do minut od północy
-    int startTime1 = startHour1 * 60 + startMinute1;
-    int endTime1 = endHour1 * 60 + endMinute1;
-    int startTime2 = startHour2 * 60 + startMinute2;
-    int endTime2 = endHour2 * 60 + endMinute2;
-    int currentTime = time.hour * 60 + time.min;
-
-    bool inTimePeriod1 = (currentTime >= startTime1 && currentTime <= endTime1) && enableTimePeriod1;
-    bool inTimePeriod2 = (currentTime >= startTime2 && currentTime <= endTime2) && enableTimePeriod2;
-
-    // Sprawdzenie czy bieżący czas mieści się w aktywnych przedziałach
-    return inTimePeriod1 || inTimePeriod2;
+   if(currentMode == MODE_BUY)
+   {
+      ProcessBuy();
+      return;
+   }
 }
